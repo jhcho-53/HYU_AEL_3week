@@ -16,6 +16,7 @@
 |---|---|---|---|
 | `notebooks/real_ipm_lab.ipynb` | 실차 bag -> 왜곡 보정 -> extrinsic 추정 -> `H_i2g.npy` + 실차 BEV 데이터셋 | CPU (GPU·gym 불필요) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/jhcho-53/HYU_AEL_3week/blob/main/notebooks/real_ipm_lab.ipynb) |
 | `notebooks/camsim_lab.ipynb` | 시뮬 BEV 데이터 -> ResNet-18 학습 -> 폐루프 -> 젯슨용 ONNX | T4 GPU | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/jhcho-53/HYU_AEL_3week/blob/main/notebooks/camsim_lab.ipynb) |
+| `notebooks/week3_label_train.ipynb` | 실차 bag (레포 안 60 MB) -> real_ipm_lab 과 같은 BEV -> **클릭으로 라벨링** -> 자동 라벨과 비교 -> camsim 형식 데이터셋 -> 학습 | T4 GPU | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/jhcho-53/HYU_AEL_3week/blob/main/notebooks/week3_label_train.ipynb) |
 
 배지를 누르면 코랩에서 열린다. 첫 셀이 이 레포를 clone 하고 필요한 것을 설치하므로 로컬에 깔 것이 없다.
 
@@ -26,6 +27,9 @@
    7장에서 같은 데이터로 camsim 학습 코드가 도는지 짧게 테스트한다.
 2. **camsim_lab**: 파라미터 셀에 real_ipm_lab 8장이 출력한 줄을 붙여 시뮬 카메라를 실차 카메라로 바꾸고 학습한다.
 3. 학습한 모델을 `real_dataset` 으로 평가해 sim-to-real 갭을 재고, camsim_lab 3장 증강 과제로 줄인다.
+4. **week3_label_train** (수업 실습): 레포에 든 2 Hz bag 으로 BEV 를 만들고 프레임마다 1 m 앞 점을 직접 클릭해 라벨링한다.
+   real_ipm_lab 의 자동 라벨과 비교한 뒤, camsim 형식 데이터셋을 만들어 같은 학습 코드를 돌린다. real_ipm_lab 을 먼저 돌릴 필요는 없다
+   (그 결과인 pitch·높이가 파라미터 셀에 적혀 있다).
 
 ## 문서
 
@@ -36,17 +40,18 @@
 
 ## 구성
 
-    camsim/            렌더러, 데이터셋, 모델, 학습, 폐루프, 드라이브 전달, 실차 bag 처리(real.py)
-    camsim/tests/      pytest. test_real.py 는 합성 영상으로 실차 파이프라인을 검증
-    notebooks/         실습 노트북. 원본은 camsim/scripts/build_notebook.py, build_real_notebook.py
+    camsim/            렌더러, 데이터셋, 모델, 학습, 폐루프, 드라이브 전달, 실차 bag 처리(real.py), 클릭 라벨링(week3_lab.py)
+    camsim/tests/      pytest. test_real.py 는 합성 영상으로 실차 파이프라인을, test_week3_lab.py 는 예제 bag 으로 라벨링 노트북을 검증
+    notebooks/         실습 노트북. 원본은 camsim/scripts/build_notebook.py, build_real_notebook.py, build_week3_notebook.py
     docs/              실차 IPM 매뉴얼
     gym/f110_gym/      업스트림 시뮬레이터 (수정 없음)
-    examples/          맵과 중심선. 트랙 지오메트리의 출처
+    examples/          맵과 중심선. 트랙 지오메트리의 출처. week3_bag/ 은 라벨링 노트북의 예제 bag (2 Hz, 60 MB)
 
 노트북을 고칠 때는 `.ipynb` 가 아니라 생성 스크립트를 고치고 다시 생성한다.
 
     python camsim/scripts/build_notebook.py
     python camsim/scripts/build_real_notebook.py
+    python camsim/scripts/build_week3_notebook.py
 
 ## 테스트
 
