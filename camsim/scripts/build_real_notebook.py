@@ -32,7 +32,7 @@ md('''
 - `out/real_dataset/` : 실차 BEV + waypoint 라벨 (`labels.csv`). `dataset.DiskDataset` 이 그대로 읽음.
   시뮬에서 학습한 모델의 **실차 오차**를 재거나, 실차 데이터로 추가 학습할 때 씀
 
-GPU 도 gym 도 필요 없음. 실차 bag (약 1.3 GB) 은 첫 실행 때 구글 드라이브에서 받음.
+GPU 도 gym 도 필요 없음 (7장 학습 테스트는 GPU 가 있으면 빨라짐). 실차 bag (약 1.3 GB) 은 첫 실행 때 구글 드라이브에서 받음.
 
 | 장 | 내용 |
 |---|---|
@@ -42,7 +42,8 @@ GPU 도 gym 도 필요 없음. 실차 bag (약 1.3 GB) 은 첫 실행 때 구글
 | 4 | 실차 BEV vs 시뮬 BEV |
 | 5 | waypoint 자동 라벨링 |
 | 6 | 데이터셋 저장 (camsim 포맷) |
-| 7 | camsim_lab 에서 쓰기 + 학습된 모델로 실차 오차 재기 |
+| 7 | 실차 데이터로 학습 테스트 (camsim 학습 코드 그대로) |
+| 8 | camsim_lab 에서 쓰기 + 학습된 모델로 실차 오차 재기 |
 ''')
 
 md('''
@@ -453,9 +454,90 @@ except Exception as e:
     print("inline playback unavailable:", type(e).__name__)
 ''')
 
-# =========================================================================== 7. camsim_lab
+# =========================================================================== 7. 학습 테스트
 md('''
-## 7. camsim_lab 에서 쓰기
+## 7. 실차 데이터로 학습 테스트
+6장에서 저장한 실차 데이터를 camsim 학습 코드(`train.train`)에 그대로 넣어 봄. **파이프라인이 끝까지 도는지 보는 테스트**이고,
+쓸 만한 모델을 만드는 단계는 아님. 데이터가 bag 하나 15초(400여 장)뿐이라 오래 돌리면 외워 버림.
+
+- **분할**: `DiskDataset` 의 기본 분할은 무작위 9:1 인데, 연속 프레임은 거의 같은 그림이라 val 에 train 과 같은 장면이 들어가 점수가 부풀려짐.
+  그래서 **시간순**으로 앞쪽을 train, 마지막 `VAL_FRAC` 를 val 로 두고 경계에 `GAP` 프레임을 버림.
+- **모델**: 기본은 `small` (작은 CNN). CPU 에서도 몇 분이면 끝남. GPU 런타임이면 `resnet18` 로 바꿔 볼 것 (ImageNet 가중치를 받음).
+- **기준선**: train 라벨 평균을 항상 내는 "상수 예측". 모델이 이것보다 확실히 나아야 뭔가 배운 것.
+
+train 오차는 작은데 val 오차만 크면 외운 것. val 구간(주행 후반)은 커브가 많아 train 과 장면이 달라서 그 차이도 드러남.
+''')
+code('''
+TRAIN_ARCH = "small"     # "small" | "resnet18" (GPU 권장)
+TRAIN_STEPS = 300
+TRAIN_BATCH = 16
+TRAIN_LR = 1e-3          # resnet18 이면 3e-4 (사전학습 가중치가 초반에 망가지지 않게)
+VAL_FRAC = 0.2           # 시간순 마지막 20 % 를 val
+GAP = 10                 # train/val 경계에서 버릴 프레임 수 (0.3 s). 경계 양쪽이 거의 같은 그림이라
+
+if dataset is None:
+    print("torch not installed: skipped (Colab has torch)")
+else:
+    import torch
+    from torch.utils.data import Subset
+    from camsim import model, train
+
+    train_cfg = copy.deepcopy(cfg)
+    train_cfg.model.arch = TRAIN_ARCH
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    ds_all = dataset.DiskDataset(DATA_OUT, train_cfg, split="all")
+    order = np.argsort(ds_all.files)                       # 파일명 = bag 프레임 번호 -> 시간순
+    n_val = int(round(len(order) * VAL_FRAC))
+    tr_idx, va_idx = order[:len(order) - n_val - GAP], order[len(order) - n_val:]
+    ds_tr, ds_va = Subset(ds_all, tr_idx.tolist()), Subset(ds_all, va_idx.tolist())
+    print(f"train {len(ds_tr)} (frames {ds_all.files[tr_idx[0]]}..{ds_all.files[tr_idx[-1]]}), "
+          f"val {len(ds_va)} (frames {ds_all.files[va_idx[0]]}..{ds_all.files[va_idx[-1]]}), device {DEVICE}")
+
+    t0 = time.time()
+    net, hist = train.train(None, train_cfg, steps=TRAIN_STEPS, batch_size=TRAIN_BATCH, lr=TRAIN_LR, device=DEVICE,
+                            out_path="out/real/model_real_test.pt", dataset=ds_tr, val_dataset=ds_va,
+                            val_batches=len(ds_va) // TRAIN_BATCH + 1, log_every=max(TRAIN_STEPS // 10, 1))
+    print(f"trained {TRAIN_STEPS} steps in {time.time() - t0:.0f}s -> out/real/model_real_test.pt")
+
+    st = [h["step"] for h in hist]
+    plt.figure(figsize=(7, 3))
+    plt.plot(st, [h["loss"] for h in hist], label="train"); plt.plot(st, [h["val_loss"] for h in hist], label="val (time split)")
+    plt.yscale("log"); plt.xlabel("step"); plt.ylabel("Huber loss"); plt.grid(alpha=0.3); plt.legend(); plt.show()
+''')
+code('''
+if dataset is not None:
+    pred = model.Predictor(net, train_cfg, DEVICE)
+    def errors(idx):
+        p = np.array([pred.predict(ds_all.load_image(int(k))) for k in idx])
+        return p, np.linalg.norm(p - ds_all.wps[idx], axis=1)
+    p_tr, e_tr = errors(tr_idx)
+    p_va, e_va = errors(va_idx)
+    e_const = np.linalg.norm(ds_all.wps[va_idx] - ds_all.wps[tr_idx].mean(0), axis=1)
+    display(pd.DataFrame({"mean (cm)": [e_tr.mean() * 100, e_va.mean() * 100, e_const.mean() * 100],
+                          "max (cm)": [e_tr.max() * 100, e_va.max() * 100, e_const.max() * 100]},
+                         index=["model on train", "model on val", "constant baseline on val"]).round(1))
+
+    frame_no = np.array([int(f.split(".")[0]) for f in ds_all.files])
+    fig, ax = plt.subplots(1, 2, figsize=(13, 3.2), sharex=True)
+    for a, c, name in ((ax[0], 0, "wp_x (forward)"), (ax[1], 1, "wp_y (+left)")):
+        a.plot(frame_no[order], ds_all.wps[order, c], "k", lw=1, label="auto label")
+        a.plot(frame_no[tr_idx], p_tr[:, c], ".", ms=2, label="pred (train)")
+        a.plot(frame_no[va_idx], p_va[:, c], ".", ms=2, label="pred (val)")
+        a.set(xlabel="bag frame", ylabel="[m]", title=name); a.grid(alpha=0.3)
+    ax[0].legend(fontsize=8); plt.tight_layout(); plt.show()
+
+    tiles = []
+    for k in va_idx[np.linspace(0, len(va_idx) - 1, 4).astype(int)]:
+        bev = ds_all.load_image(int(k))
+        render.draw_points_bev(bev, ds_all.wps[k], cfg, (0, 255, 0))
+        render.draw_points_bev(bev, pred.predict(ds_all.load_image(int(k))), cfg, (255, 0, 255))
+        tiles.append(bev)
+    show(viz.side_by_side(*tiles), width=1000, title="val frames: green = auto label, magenta = model")
+''')
+
+# =========================================================================== 8. camsim_lab
+md('''
+## 8. camsim_lab 에서 쓰기
 코랩은 노트북마다 런타임이 따로라 파일이 안 넘어감. 아래 셀이 드라이브 `MyDrive/camsim_results/real/` 로 옮김
 (`H_i2g.npy`, `real_spec.json`, `real_dataset.zip`).
 

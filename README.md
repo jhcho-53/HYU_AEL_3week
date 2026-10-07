@@ -23,7 +23,8 @@
 
 1. **real_ipm_lab**: 실차 bag 으로 `H_i2g.npy` 와 `real_dataset` 을 만들고 드라이브 `MyDrive/camsim_results/real/` 에 올린다.
    실측값은 차선 간격 하나면 된다 (현재 bag: 0.80 m -> 카메라 높이 0.178 m, pitch -4.25 도).
-2. **camsim_lab**: 파라미터 셀에 real_ipm_lab 7장이 출력한 줄을 붙여 시뮬 카메라를 실차 카메라로 바꾸고 학습한다.
+   7장에서 같은 데이터로 camsim 학습 코드가 도는지 짧게 테스트한다.
+2. **camsim_lab**: 파라미터 셀에 real_ipm_lab 8장이 출력한 줄을 붙여 시뮬 카메라를 실차 카메라로 바꾸고 학습한다.
 3. 학습한 모델을 `real_dataset` 으로 평가해 sim-to-real 갭을 재고, camsim_lab 3장 증강 과제로 줄인다.
 
 ## 문서

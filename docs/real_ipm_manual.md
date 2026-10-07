@@ -71,7 +71,7 @@ pip install rosbags gdown opencv-python-headless pyyaml pandas matplotlib imagei
 ln -s /path/to/bag_folder out/real_bag        # 이미 받은 bag 이 있으면 다운로드 대신 연결
 jupyter notebook notebooks/real_ipm_lab.ipynb
 ```
-torch 는 6장의 `DiskDataset` 확인과 7장 모델 평가에만 필요하다. 없으면 그 부분만 건너뛴다.
+torch 는 6장의 `DiskDataset` 확인, 7장 학습 테스트, 8장 모델 평가에만 필요하다. 없으면 그 부분만 건너뛴다.
 
 ### 3.3 파라미터 (0장)
 
@@ -96,6 +96,7 @@ torch 는 6장의 `DiskDataset` 확인과 7장 모델 평가에만 필요하다.
 | 4. BEV 비교 | 시뮬과 실차 BEV 의 회색(안 보이는 곳) 모양 일치율 | 99.9 % |
 | 5. 라벨링 | 상태가 대부분 `two_lanes`, 초록 점이 두 테이프 사이 | 556/556 `two_lanes`, 튐 0 |
 | 6. 저장 | `DiskDataset` 이 읽히는지, 미리보기 영상에서 빨간(skipped) 프레임 확인 | 439 장, 75 MB |
+| 7. 학습 테스트 | 학습이 끝까지 돌고, val 오차가 상수 기준선보다 작은지 (데이터가 적어 train 과 차이는 큼) | 아래 6.3 참고 |
 
 ## 5. 결과물
 
@@ -119,7 +120,7 @@ out/real_dataset/
 
 ## 6. camsim_lab 과 연결
 
-코랩은 노트북마다 런타임이 따로라 파일이 넘어가지 않는다. real_ipm_lab 7장이 드라이브 `MyDrive/camsim_results/real/` 에
+코랩은 노트북마다 런타임이 따로라 파일이 넘어가지 않는다. real_ipm_lab 8장이 드라이브 `MyDrive/camsim_results/real/` 에
 `H_i2g.npy`, `real_spec.json`, `real_dataset.zip` 을 올린다.
 
 ### 6.1 시뮬 카메라를 실차 카메라로
@@ -129,7 +130,7 @@ from google.colab import drive; drive.mount("/content/drive")
 !mkdir -p out/real && cp /content/drive/MyDrive/camsim_results/real/H_i2g.npy out/real/
 !unzip -q -o /content/drive/MyDrive/camsim_results/real/real_dataset.zip -d out/
 ```
-파라미터 셀에 real_ipm_lab 7장이 출력하는 줄을 붙인다 (현재 bag 기준 값).
+파라미터 셀에 real_ipm_lab 8장이 출력하는 줄을 붙인다 (현재 bag 기준 값).
 ```python
 cfg.camera.h_i2g_file = "out/real/H_i2g.npy"
 cfg.camera.height_m = 0.1783     # jitter_bev 증강이 기준 자세로 씀
@@ -149,10 +150,17 @@ ds_real = dataset.DiskDataset("out/real_dataset", cfg, "all")
 r_real = train.evaluate_dataset(pred, ds_real)
 print(f"real: mean {r_real['mean_m']*100:.1f} cm, max {r_real['max_m']*100:.1f} cm")
 ```
-real_ipm_lab 7장에서 `MODEL_PT` 에 드라이브의 `model.pt` 경로를 넣어도 같은 걸 잴 수 있다 (가장 틀린 4장도 보여줌).
+real_ipm_lab 8장에서 `MODEL_PT` 에 드라이브의 `model.pt` 경로를 넣어도 같은 걸 잴 수 있다 (가장 틀린 4장도 보여줌).
 시뮬만으로 학습한 모델은 실차 오차가 크게 나오는 게 정상이다. 그게 sim-to-real 갭이고, 3장 증강 과제 전후로 이 숫자를 비교한다.
 
-### 6.3 실차 데이터를 학습에 섞을 때
+### 6.3 실차 데이터로 학습 (real_ipm_lab 7장)
+real_ipm_lab 7장이 `out/real_dataset` 을 camsim `train.train` 에 그대로 넣어 짧게 학습해 본다.
+시간순으로 앞쪽 80 % 를 train, 마지막 20 % 를 val 로 두고 경계 10 프레임을 버린다. 기본은 `small` 모델 300 스텝이라 CPU 에서도 몇 분이면 끝난다.
+파이프라인 확인용이지 쓸 만한 모델을 만드는 단계는 아니다. bag 하나(400여 장)로는 외워 버리므로, 실차 데이터로 제대로 학습하려면
+bag 을 더 녹화하거나 시뮬 데이터와 `torch.utils.data.ConcatDataset` 으로 섞는다.
+`train.train` 은 항상 새 모델(ImageNet 가중치)에서 시작한다. 시뮬로 학습한 `model.pt` 에서 이어 학습하는 옵션은 아직 없다.
+
+주의할 점:
 - 연속 프레임은 거의 같은 그림이라 `DiskDataset` 의 무작위 9:1 분할을 쓰면 val 에 train 과 같은 장면이 들어가서 점수가 부풀려진다.
   **시간 구간이나 bag 단위로 나눈다.**
 - 체크포인트의 `input_spec` (BEV 규격, waypoint 설정, 테이프 색, 모델 구조)이 다르면 `model.load` 가 거부한다.

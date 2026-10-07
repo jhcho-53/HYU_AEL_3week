@@ -69,7 +69,7 @@ roll, yaw 는 0 가정. 지금 bag 기준 pitch -4.25 도(살짝 위로 들림),
 만들고, 후륜축에 가장 가까운 점에서 호길이 `ahead_m` 앞의 점을 잡는다. `test_real.py` 가 camsim 렌더러로 그린
 합성 영상에서 pitch 와 waypoint 를 되찾는지 확인한다.
 
-camsim_lab 에서 실차 카메라로 시뮬 데이터를 만들려면 파라미터 셀에 노트북 7장이 출력하는 줄들을 붙인다
+camsim_lab 에서 실차 카메라로 시뮬 데이터를 만들려면 파라미터 셀에 노트북 8장이 출력하는 줄들을 붙인다
 (`h_i2g_file`, `height_m`, `pitch_deg`, `follow_walls = False`, `track_width_m`). 학습한 모델의 실차 오차는
 `train.evaluate_dataset(pred, dataset.DiskDataset("out/real_dataset", cfg, "all"))`. 연속 프레임은 거의 같은
 그림이라 실차 데이터를 학습에 섞을 땐 무작위 9:1 말고 시간 구간이나 bag 단위로 나눌 것.
