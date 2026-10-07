@@ -56,6 +56,7 @@ BEV 범위와 해상도는 `config.yaml` 의 `bev:` 섹션 하나로 정한다. 
 
 실차 카메라 bag (ROS 2, `bayer_rggb8`) 에서 위 "실차" 경로의 재료 두 가지를 만든다. GPU 도 gym 도 필요 없고,
 bag (약 1.3 GB) 은 첫 실행 때 구글 드라이브에서 받는다. 노트북 원본은 `camsim/scripts/build_real_notebook.py`.
+녹화 조건, 실측할 것, 장별 확인 항목, 문제 해결은 [실차 IPM 매뉴얼](../docs/real_ipm_manual.md) 에 있다.
 
     out/real/H_i2g.npy      camsim 해상도(640x400) 이미지 px -> 후륜축 기준 지면 m. cfg.camera.h_i2g_file 로 넣음
     out/real_dataset/       실차 BEV + labels.csv (DiskDataset 포맷 그대로). x, y, theta 는 nan (world pose 없음)
