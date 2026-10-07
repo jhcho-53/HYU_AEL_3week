@@ -97,6 +97,9 @@ HEIGHT_M = 0.178                                 # real_ipm_lab 3장 결과 (m)
 OFFSET_X_M = 0.0                                 # 후륜축 -> 카메라 전방 거리. 모르면 0
 LANE_WIDTH_M = 0.8                               # 테이프 중심 간 간격 (m, 실측)
 NAME = Path(BAG).stem                            # 라벨 파일과 데이터셋 이미지 이름에 씀
+if IN_COLAB and str(BAG).startswith("/content/drive"):   # 내 bag 을 드라이브에 뒀으면 연결 (맨 아래 "내 bag 으로 하기")
+    from google.colab import drive
+    drive.mount("/content/drive")
 print("bag:", NAME)
 ''')
 
@@ -261,15 +264,17 @@ md('''
 
 1. 차에서 bag 을 0.5초에 한 장으로 줄임. 원본은 1분에 약 5 GB 라 그대로는 올리기 힘듦 (40 Hz 카메라면 20장에 한 장):
    `python3 camsim/scripts/decimate_bag.py data/bags/my_run data/bags/my_run_2hz 20`
-2. 줄인 bag 폴더 안의 **`.db3` 파일 하나**(예: `my_run_2hz_0.db3`)와 그 카메라의 `ost.yaml` 을 노트북 컴퓨터로 가져와서
-   (scp 나 USB) 왼쪽 **파일 창(📁)** 에 끌어다 놓음. 올린 파일은 `/content/` 에 생기고, 런타임이 끊기면 사라짐
+2. 줄인 bag 폴더(`my_run_2hz/`)와 그 카메라의 `ost.yaml` 을 노트북 컴퓨터로 가져와서(scp 나 USB) **구글 드라이브**의
+   `내 드라이브/week3/` 에 올림. 런타임이 끊겨도 남고, 다음에 또 쓸 수 있음.
+   (작은 파일이면 왼쪽 파일 창(📁)에 끌어다 놓아도 됨. 그건 `/content/` 에 생기고 런타임이 끊기면 사라짐)
 3. 카메라 자세: 조교 차와 카메라 위치가 다르면 `real_ipm_lab` 을 내 bag(원본)으로 돌려 3장이 출력하는 pitch 와 높이를 받아 둠
-4. 0장 파라미터 셀의 아래 줄들을 바꾸고 그 셀부터 다시 실행 (나머지 줄은 그대로 둠). 카메라 토픽 이름이 다르면 `TOPIC` 도 바꿈
+4. 0장 파라미터 셀의 아래 줄들을 바꿔서 그 셀부터 다시 실행 (나머지 줄은 그대로 둠). `BAG` 이 드라이브 경로면 그 셀이
+   드라이브를 알아서 연결함 (처음 한 번 구글 계정 허용 창이 뜸). 카메라 토픽 이름이 다르면 `TOPIC` 도 바꿈
    (1장 표에 bag 의 토픽이 나옴)
 
 ```python
-BAG = "/content/my_run_2hz_0.db3"
-OST = "/content/ost.yaml"
+BAG = "/content/drive/MyDrive/week3/my_run_2hz"      # 폴더 (metadata.yaml + .db3), 또는 .db3 파일 하나
+OST = "/content/drive/MyDrive/week3/ost.yaml"
 PITCH_DEG = ...      # real_ipm_lab 3장 출력
 HEIGHT_M = ...
 ```
