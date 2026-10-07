@@ -1,0 +1,15 @@
+build/
+gym/f110_gym.egg-info
+__pycache__
+*.pyc
+.DS_Store
+.vscode/
+.venv*/
+
+# camsim 실행 산출물
+/out/
+/model.pt
+/model.onnx
+
+# 발표자료 (바이너리. 레포에 넣으면 clone 할 때마다 받아야 한다)
+*.pptx

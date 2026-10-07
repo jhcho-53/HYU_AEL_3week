@@ -1,0 +1,28 @@
+# Colab notebook dependencies. gym==0.19.0 and f110_gym are installed separately
+# by the notebook because the upstream package metadata is incompatible with
+# current Colab images. Keep Colab's preinstalled NumPy and PyTorch builds.
+# Jetson only downloads model.onnx; it does not need this file.
+
+# Camera, map and dataset
+opencv-python-headless
+pyyaml
+scipy
+numba
+pillow
+
+# F1TENTH Gym runtime
+cloudpickle
+pyglet<1.5
+pyopengl
+setuptools
+wheel
+
+# Notebook display and reports
+imageio-ffmpeg
+matplotlib
+pandas
+
+# Jetson TensorRT handoff: export model.onnx and check it against PyTorch.
+# torchvision is not listed on purpose: Colab ships it matched to its torch, and pip could swap torch.
+onnx
+onnxruntime

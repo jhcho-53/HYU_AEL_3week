@@ -1,0 +1,35 @@
+import pytest, textwrap
+from camsim import config
+
+def test_default_config_values():
+    """Documents the shipped camsim/config.yaml defaults (literal on purpose)."""
+    cfg = config.load()
+    assert cfg.camera.image_width == 640
+    assert cfg.camera.image_height == 400
+    assert cfg.lane.track_width_m == 0.8
+    assert cfg.waypoints.ahead_m == 1.0
+    assert cfg.model.arch == "resnet18" and cfg.model.pretrained
+    assert cfg.render.lidar_fov_rad == pytest.approx(4.7)
+
+def test_missing_key_names_key(tmp_path):
+    p = tmp_path / "c.yaml"
+    p.write_text(textwrap.dedent("""
+        camera: {image_width: 640}
+    """))
+    with pytest.raises(config.ConfigError) as e:
+        config.load(str(p))
+    assert "camera.image_height" in str(e.value)
+
+def test_unknown_key_names_key(tmp_path):
+    src = open(config.DEFAULT_PATH).read() + "\nlane_typo: 1\n"
+    p = tmp_path / "c.yaml"; p.write_text(src)
+    with pytest.raises(config.ConfigError) as e:
+        config.load(str(p))
+    assert "lane_typo" in str(e.value)
+
+def test_aspect_ratio_mismatch_raises(tmp_path):
+    src = open(config.DEFAULT_PATH).read().replace("image_height: 400", "image_height: 480")
+    p = tmp_path / "c.yaml"; p.write_text(src)
+    with pytest.raises(config.ConfigError) as e:
+        config.load(str(p))
+    assert "aspect" in str(e.value)

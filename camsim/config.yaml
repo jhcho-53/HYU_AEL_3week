@@ -1,0 +1,81 @@
+# 학생이 편집하는 유일한 파일. 단위는 키 이름에 붙어 있음 (_m 미터, _deg 도, _px 픽셀).
+# 노트북 쓸 때는 각 장 첫 셀의 파라미터가 이 값들을 덮어씀. 여기 값은 기본값.
+
+camera:
+  image_width: 640          # 렌더 해상도. 실차 1920x1200 을 여기로 줄여서 씀
+  image_height: 400
+  sensor_width_mm: 6.62     # FLIR BFS-U3-23S3 데이터시트 (1920 x 3.45um)
+  sensor_height_mm: 4.14
+  hfov_deg: 90.0            # 렌즈 수평 화각
+  height_m: 0.20            # 바닥에서 렌즈 중심까지. 마운트 확정 전 가정값
+  pitch_deg: 0.0            # 아래로 숙인 각도 (+ = 아래). 정면이면 0
+  offset_x_m: 0.0           # 후륜축 기준 카메라 전방 오프셋
+  h_i2g_file: null          # 캘리브레이션 결과 H_i2g (.npy, 3x3, image px -> ground m).
+                            # 넣으면 위의 카메라 가정값은 전부 무시됨
+
+lane:
+  follow_walls: true        # true  맵 벽 안쪽을 따라 테이프 놓음 (폭이 구간마다 달라짐)
+                            # false 중심선에서 좌우 track_width_m/2 로 일정하게. 실습실 테이프 트랙 방식
+  wall_margin_m: 0.25       # follow_walls 일 때 벽에서 얼마나 안쪽에
+  track_width_m: 0.8        # follow_walls: false 일 때 좌우 테이프 중심 간격
+  tape_width_m: 0.05
+  segment_len_m: 0.05       # 테이프를 쪼개는 사각형 하나의 길이
+  color_floor: [128, 128, 128]   # BGR. 회색 에폭시 바닥
+  color_tape: [0, 220, 255]      # BGR. 노란 테이프
+
+bev:                        # 모델 입력 규격. 시뮬 BEV 와 실차 IPM 출력이 공유
+  x_range_m: [0.2, 4.0]     # 전방 거리 범위
+  y_range_m: [-1.5, 1.5]    # 좌(+) / 우(-)
+  resolution_m: 0.01        # m/px -> 380 x 300 픽셀. 테이프 5 cm = 5 px. 카메라가 1.5 m 에서 주는 해상도보다 촘촘함
+
+render:
+  near_m: 0.15              # 이보다 가까운 테이프는 안 그림
+  far_m: 10.0               # 이보다 먼 테이프도 안 그림
+  lidar_fov_rad: 4.7        # f110_gym 기본 LiDAR 화각 (1080 빔)
+
+waypoints:
+  line: center              # 정답 경로 기준
+                            #   center 좌우 테이프의 중간선. 실차 자동 라벨링과 같은 기준
+                            #   racing CSV 에 든 레이싱 라인. 코너 안쪽 파고들어 더 짧음
+  ahead_m: 1.0              # 예측할 waypoint 의 전방 호길이 (m). 이 점이 곧 pure pursuit 목표점.
+                            # 카메라 높이 0.2 m 로는 2 m 넘기지 말 것 (IPM 복구 무너짐)
+  norm_m: 1.0               # 타깃 정규화 나눗수
+
+sampling:
+  lateral_frac: 0.35        # 기준선에서 ±트랙폭*frac 범위에 pose 뿌림
+  heading_deg: 15.0         # 헤딩도 ± 이만큼
+
+augment:                    # 기본값은 전부 "변화 없음". 증강 설계는 노트북 3장 과제
+  # 기하 - IPM 평면 가정이 깨지거나 테이프가 상한 경우
+  pitch_jitter_deg: 0.0     # jitter_bev. 가감속 때 pitch 변해서 BEV 휘는 정도
+  ipm_blur_max_px: 0        # ipm_blur. 먼 곳일수록 커지는 블러의 최대 커널 (0 이면 안 씀)
+  tape_dropout_prob: 0.0    # erase_patches 적용 확률
+  # 조명
+  brightness_delta: 0.0     # brightness_contrast 의 밝기 ± (convertScaleAbs beta)
+  contrast_range: [1.0, 1.0]   # 대비 배율 (alpha)
+  gamma_range: [1.0, 1.0]      # 감마 범위
+  hue_shift_deg: 0.0        # hsv_shift 의 색상 ±. 조명 색온도 변화
+  sat_scale: [1.0, 1.0]     # 채도 배율
+  illum_strength: 0.0       # illumination. 불균일 조명 세기 0~1
+  shadow_prob: 0.0          # shadow 적용 확률
+  shadow_darkness: [0.5, 0.8]  # 그림자 안 밝기 배율
+  # 센서
+  blur_max_px: 0            # GaussianBlur 최대 커널 (0 이나 1 이면 안 씀)
+  noise_sigma: 0.0          # 가우시안 노이즈 표준편차
+  jpeg_quality: [100, 100]  # JPEG 품질 범위 (100 이면 사실상 무손실)
+
+model:
+  arch: resnet18            # resnet18 = ImageNet 사전학습 백본 (실차 조명·질감 변화에 강함)
+                            # small    = 작은 CNN (37만 파라미터, 젯슨이 느리면)
+  pretrained: true          # resnet18 일 때 ImageNet 가중치로 시작
+
+closed_loop:
+  map_yaml: examples/example_map.yaml
+  centerline_csv: examples/example_waypoints.csv
+  control_hz: 25            # 카메라/제어 주기. gym 물리 100 Hz 의 약수여야 함 (25, 50, 100)
+  speed_mps: 2.0
+  max_steps: 4000           # 제어 틱
+  car_length_m: 0.58        # gym 기본 차체. 테이프 실격 판정에 씀
+  car_width_m: 0.31
+  wheelbase_m: 0.3302       # lf + lr (gym 기본)
+  steer_max_rad: 0.4189
