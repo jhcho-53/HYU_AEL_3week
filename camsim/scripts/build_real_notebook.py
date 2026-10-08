@@ -24,15 +24,17 @@ def code(text):
 
 # =========================================================================== 0. 설정
 md('''
-# 실차 IPM 실습 — bag 에서 camsim 규격 데이터까지
+# 실차 IPM 실습 및 rosbag 에서 라벨링, 학습까지
 
-`camsim_lab.ipynb` 는 시뮬로 BEV 를 그려서 학습함. 이 노트북은 **실차 카메라 bag** 으로 같은 규격을 만듦.
+`camsim_lab.ipynb` 는 시뮬로 BEV 를 그려서 학습함. 이 노트북은 **실차 카메라 bag** 으로 같은 규격을 만들고,
+정답(1 m 앞 점)을 자동으로 찾은 뒤 **직접 찍어서** 고치고, 같은 학습 코드를 돌려 봄.
 
 - `out/real/H_i2g.npy` : 실차 카메라 homography. camsim_lab 파라미터 셀의 `cfg.camera.h_i2g_file` 로 넣으면 시뮬 카메라가 실차와 같아짐
 - `out/real_dataset/` : 실차 BEV + waypoint 라벨 (`labels.csv`). `dataset.DiskDataset` 이 그대로 읽음.
   시뮬에서 학습한 모델의 **실차 오차**를 재거나, 실차 데이터로 추가 학습할 때 씀
 
 GPU 도 gym 도 필요 없음 (7장 학습 테스트는 GPU 가 있으면 빨라짐). 실차 bag (약 1.3 GB) 은 첫 실행 때 구글 드라이브에서 받음.
+5장의 클릭 화면은 코랩에서만 뜸.
 
 | 장 | 내용 |
 |---|---|
@@ -40,10 +42,13 @@ GPU 도 gym 도 필요 없음 (7장 학습 테스트는 GPU 가 있으면 빨라
 | 2 | 디코딩과 왜곡 보정: Bayer, `ost.yaml`, camsim 해상도 |
 | 3 | 바닥 기준 extrinsic: pitch 추정, 높이, `H_i2g.npy` |
 | 4 | 실차 BEV vs 시뮬 BEV |
-| 5 | waypoint 자동 라벨링 |
-| 6 | 데이터셋 저장 (camsim 포맷) |
-| 7 | 실차 데이터로 학습 테스트 (camsim 학습 코드 그대로) |
+| 5 | 라벨링: 자동 라벨 → 직접 찍기(클릭) → 둘 비교 |
+| 6 | 데이터셋 저장 (camsim 포맷). 직접 찍은 프레임은 내 라벨로 |
+| 7 | 실차 데이터로 학습 테스트 (2주차 수업 학습 코드 그대로) |
 | 8 | camsim_lab 에서 쓰기 + 학습된 모델로 실차 오차 재기 |
+| 9 | 학습한 모델을 차에서 돌리기 (`/waypoint` → 주행) |
+
+내 차로 녹화한 bag 으로 하려면 맨 아래 "내 bag 으로 하기".
 ''')
 
 md('''
@@ -58,8 +63,8 @@ if IN_COLAB:
     if not os.path.isdir("/content/f1tenth_gym"):
         subprocess.run(["git", "clone", "-q", "--branch", "main", REPO_URL, "/content/f1tenth_gym"], check=True)
     subprocess.run(["git", "-C", "/content/f1tenth_gym", "pull", "-q", "--ff-only"], check=True)
-    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "rosbags", "gdown", "opencv-python-headless",
-                    "pyyaml", "imageio-ffmpeg"], check=True)
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "rosbags==0.11.5", "gdown", "opencv-python-headless",
+                    "pyyaml", "imageio-ffmpeg", "onnx"], check=True)   # onnx: 9장 model.onnx 내보내기
 print("colab" if IN_COLAB else "local")
 ''')
 code('''
@@ -72,7 +77,7 @@ from IPython.display import Image, Video, display
 ROOT = Path("/content/f1tenth_gym") if IN_COLAB else next(p for p in [Path.cwd(), *Path.cwd().parents] if (p / "camsim").is_dir())
 os.chdir(ROOT)
 sys.path[:0] = [str(ROOT)]
-from camsim import config, camera, track, render, real, viz
+from camsim import config, camera, track, render, real, viz, week3_lab
 
 plt.rcParams.update({"figure.dpi": 80, "axes.unicode_minus": False})   # 코랩 기본 폰트에 한글 없음. 그래프 글자는 영어로
 os.makedirs("out/real", exist_ok=True)
@@ -91,38 +96,57 @@ md('''
 - 바닥 기준 높이는 영상만으론 알 수 없어서 실측 하나가 필요함. **차선 간격(테이프 중심 간)** 을 줄자로 재는 게 렌즈 높이보다 쉽고 정확함.
   둘 다 None 이면 `config.yaml` 의 가정값(0.20 m)을 씀.
 - `OFFSET_X_M`: camsim 좌표 원점은 **후륜축**. 카메라가 후륜축보다 앞에 있으면 그 거리. 모르면 0 (camsim 기본값과 같음).
+- `BAG_DIR`, `OST_FILE`: bag 폴더와 그 카메라의 렌즈 캘리브레이션(`ost.yaml`, 1주차 결과). 내 bag 이면 맨 아래 "내 bag 으로 하기".
+- `PITCH_MEASURED`: 3장은 출발 전 정지 구간으로 pitch 를 잼. 정지 구간이 짧아서 추정이 이상하면 따로 잰 값을 넣음
+  (카메라 마운트를 안 건드렸으면 전에 같은 차로 잰 값). 렌즈 높이를 자로 쟀으면 `CAM_HEIGHT_MEASURED` 도 넣음.
 ''')
 code('''
 cfg = config.load()
 cfg.waypoints.ahead_m = 1.0        # 라벨 waypoint 의 전방 호길이 (m). camsim_lab 과 같게
 
-BAG_DIR = "out/real_bag"           # metadata.yaml, ost.yaml, *.db3 이 있는 폴더. 없으면 아래 드라이브에서 받음
+BAG_DIR = "out/real_bag"           # metadata.yaml, *.db3 이 있는 폴더. 없으면 아래 드라이브에서 받음
+OST_FILE = f"{BAG_DIR}/ost.yaml"   # 그 카메라의 렌즈 캘리브레이션 (K, 왜곡 D)
 DRIVE_FOLDER_URL = "https://drive.google.com/drive/folders/1dKVcoT88K1Ky4co-fWjh_0aNSpuK7LMr"
 
 LANE_WIDTH_MEASURED = 0.80         # [m] 두 테이프 중심 사이 간격 (실측)
 CAM_HEIGHT_MEASURED = None         # [m] 바닥 ~ 렌즈 중심 (실측). 넣으면 차선 간격보다 우선
+PITCH_MEASURED = None              # [deg] 넣으면 3장 추정 대신 씀 (정지 구간이 짧은 bag 용)
 OFFSET_X_M = 0.0                   # [m] 후륜축 -> 카메라 전방 거리
 
 SKIP_STATIC = True                 # 출발 전 정지 구간 프레임은 거의 같은 이미지라 데이터셋에서 뺌
+CLICK_EVERY_S = 0.5                # 5장에서 직접 찍을 프레임 간격 (초)
 H_FILE = "out/real/H_i2g.npy"
 DATA_OUT = "out/real_dataset"
 ''')
 code('''
-DATA_FILES = ["metadata.yaml", "ost.yaml"]
-if not (all((Path(BAG_DIR) / f).exists() for f in DATA_FILES) and list(Path(BAG_DIR).glob("*.db3"))):
-    import gdown
+def have_bag():
+    return (Path(BAG_DIR) / "metadata.yaml").exists() and Path(OST_FILE).exists() and any(Path(BAG_DIR).glob("*.db3"))
+
+CLASS_BAG_DIR = "out/real_bag"                       # 수업 bag 을 받아 두는 곳
+if str(BAG_DIR).startswith("/content/drive"):        # 내 bag 을 드라이브에 뒀으면 연결 (맨 아래 "내 bag 으로 하기")
+    from google.colab import drive
+    drive.mount("/content/drive")
+if not have_bag() and BAG_DIR != CLASS_BAG_DIR:      # 내 bag 경로가 틀렸으면 수업 bag 을 받지 않고 멈춤
+    raise FileNotFoundError(f"{BAG_DIR} 에 metadata.yaml 이나 .db3 가 없거나 {OST_FILE} 가 없음. 경로를 확인할 것.")
+if not have_bag():
     print("Downloading the bag from Google Drive (~1.3 GB). If it stalls, rerun this cell.")
-    gdown.download_folder(DRIVE_FOLDER_URL, output=BAG_DIR, quiet=False)
-print("bag:", sorted(p.name for p in Path(BAG_DIR).iterdir()))
+    try:
+        import gdown
+        gdown.download_folder(DRIVE_FOLDER_URL, output=BAG_DIR, quiet=False)
+    except Exception as e:                           # 여러 명이 한꺼번에 받으면 드라이브가 막을 수 있음 (다운로드 할당량)
+        print("download failed:", type(e).__name__, e)
+if not have_bag():                                   # 그래도 없으면 레포 안 예제 bag: 같은 주행을 0.5초에 한 장으로 줄인 것
+    BAG_DIR, OST_FILE = str(week3_lab.SAMPLE / "run_train2_part1_2hz"), str(week3_lab.SAMPLE / "ost.yaml")
+    print("드라이브에서 bag 을 못 받아서 레포 안 예제 bag 으로 진행함 (같은 주행, 0.5초에 한 장).")
+print("bag:", BAG_DIR, sorted(p.name for p in Path(BAG_DIR).iterdir()))
 ''')
 
 # =========================================================================== 1. bag
 md('''
 ## 1. bag 살펴보기
-ROS 설치 없이 `rosbags` 로 읽음. 카메라 토픽 하나만 녹화돼 있고 **`camera_info` 는 0 으로 비어 있음.**
-`/tf` 도 없어서 카메라가 바닥에서 얼마나, 어떤 각도로 달렸는지(extrinsic)는 bag 어디에도 없음. 3장에서 영상으로 추정함.
+`/tf` 가 없어서 카메라가 바닥에서 얼마나, 어떤 각도로 달렸는지(extrinsic)는 bag 어디에도 없음. 3장에서 영상으로 추정함.
 
-프레임 간 밝기 차로 움직임을 재서, 출발 전 **정지 구간**을 찾음. 3장 pitch 추정은 차선이 곧은 이 구간으로 함.
+프레임 간 밝기 차로 움직임을 재서, 출발 전 정지 구간을 찾음. 3장 pitch 추정은 차선이 곧은 이 구간으로 함.
 ''')
 code('''
 with real.open_bag(BAG_DIR) as reader:
@@ -133,14 +157,19 @@ with real.open_bag(BAG_DIR) as reader:
 print("camera_info K:", list(info.k), " -> empty, so intrinsics come from ost.yaml")
 
 stamps, motion = real.scan_motion(BAG_DIR)
-STATIC_END = real.static_end(motion)
 N_FRAMES = len(stamps)
+FPS = 1e9 / np.diff(stamps).mean()
+MOTION_THRESH = 4.0 if FPS >= 10 else 10.0     # 0.5초에 한 장으로 줄인 bag 은 서 있어도 프레임 사이 차이가 3~8 이라 기준을 올림
+STATIC_END = real.static_end(motion, MOTION_THRESH)
 t_s = (stamps - stamps[0]) / 1e9
-print(f"{N_FRAMES} frames, {1e9 / np.diff(stamps).mean():.1f} FPS, static: frame 0 ~ {STATIC_END - 1}")
+print(f"{N_FRAMES} frames, {FPS:.1f} FPS, static: frame 0 ~ {STATIC_END - 1}")
+if STATIC_END / FPS < 1.0 and PITCH_MEASURED is None:
+    print(f"출발 전 정지 구간이 {STATIC_END / FPS:.1f}초({STATIC_END}장)뿐임. 3초 이상 세워 두고 녹화해야 3장 pitch 추정이 확실함. "
+          "추정이 이상하면 따로 잰 값을 파라미터 셀의 PITCH_MEASURED, CAM_HEIGHT_MEASURED 에 넣을 것.")
 
 fig, ax = plt.subplots(figsize=(10, 3))
-ax.plot(t_s, motion, lw=0.8); ax.axhline(4.0, color="r", ls="--", lw=0.8)
-ax.axvspan(0, t_s[STATIC_END], color="g", alpha=0.15, label="static")
+ax.plot(t_s, motion, lw=0.8); ax.axhline(MOTION_THRESH, color="r", ls="--", lw=0.8)
+ax.axvspan(0, t_s[min(STATIC_END, N_FRAMES - 1)], color="g", alpha=0.15, label="static")
 ax.set(xlabel="time [s]", ylabel="mean |frame diff|", title="Motion"); ax.legend(); plt.show()
 ''')
 
@@ -157,7 +186,7 @@ ROS 의 `rggb8` 은 `COLOR_BayerBG2BGR` 로 바꿔야 함 (`cv_bridge` 도 같�
 camsim 기본 카메라는 화각 90 도 가정인데, 실측 K 로 계산하면 85 도쯤임.
 ''')
 code('''
-K_FULL, D, FULL_SIZE = real.load_ost(f"{BAG_DIR}/ost.yaml")
+K_FULL, D, FULL_SIZE = real.load_ost(OST_FILE)
 UNDIST = real.undistort_maps(K_FULL, D, FULL_SIZE)
 def undistort(img):
     return cv2.remap(img, *UNDIST, interpolation=cv2.INTER_LINEAR)
@@ -167,9 +196,11 @@ print(f"full {FULL_SIZE}, camsim {real.camsim_size(cfg)}, D = {np.round(D, 4).to
 print(f"horizontal FOV: real {hfov:.1f} deg vs config.yaml assumption {cfg.camera.hfov_deg:.1f} deg")
 print("K (camsim resolution) =\\n", np.round(K_CAM, 2))
 
-DEMO_IDX = [60, 250, 340, 450]
+DEMO_IDX = [60, 250, 340, 450]                    # 장면 예시 (기본 bag 556장 기준)
+if N_FRAMES <= max(DEMO_IDX):                     # 짧은 bag (0.5초에 한 장으로 줄인 bag 등) 이면 같은 비율 위치로
+    DEMO_IDX = sorted({int(i * (N_FRAMES - 1) / 556) for i in DEMO_IDX})
 msgs = real.load_images(BAG_DIR, DEMO_IDX)
-m = msgs[60]
+m = msgs[DEMO_IDX[0]]
 mosaic = np.frombuffer(m.data, np.uint8).reshape(m.height, m.step)
 raw = real.decode_image(m)
 fig, ax = plt.subplots(1, 3, figsize=(16, 4))
@@ -187,6 +218,8 @@ IPM 에는 카메라가 바닥에서 **얼마나 높이, 어떤 각도로** 달�
 
 - **pitch**: 정지 구간 프레임에서 노란 테이프를 HSV 로 고르고, pitch 를 바꿔 가며 위에서 본 두 차선의 간격이
   행마다 얼마나 일정한지(변동계수 std/mean)를 잼. 가장 일정할 때가 정답. 차선이 곧은 구간에서만 성립함.
+  정지 구간이 짧으면 이 추정이 틀릴 수 있어서, 따로 잰 pitch 가 있으면 0장의 `PITCH_MEASURED` 에 넣음
+  (높이는 그대로 정지 구간 프레임과 실측 차선 간격으로 잼).
 - **높이**: 지면이 통째로 높이에 비례해 커지거나 작아질 뿐 영상은 똑같아서, 영상만으론 못 정함. 위에서 차선 간격이
   "높이의 몇 배"로 나오므로 실측 간격 하나로 높이가 정해짐.
 - roll, yaw 는 0 으로 가정. 정확히 하려면 바닥에 체커보드를 놓고 `cv2.solvePnP` 로 네 값을 한 번에 구하면 됨.
@@ -195,13 +228,19 @@ IPM 에는 카메라가 바닥에서 **얼마나 높이, 어떤 각도로** 달�
 ''')
 code('''
 V_MARGIN = 15                                        # 지평선에서 이만큼 아래부터 바닥으로 봄 (원본 px)
-static_idx = list(range(0, STATIC_END, 10))
+static_idx = list(range(0, max(STATIC_END, 1), 10 if STATIC_END > 30 else 1))   # 줄인 bag 은 정지 구간이 몇 장뿐이라 전부
 static_frames = {i: undistort(real.decode_image(m)) for i, m in real.load_images(BAG_DIR, static_idx).items()}
-PITCH = 0.0                                          # 1차: 지평선을 영상 중앙(pitch 0)으로 보고 추정
-for _ in range(2):                                   # 2차: 1차 pitch 의 지평선 아래만 써서 다시
+PITCH = 0.0 if PITCH_MEASURED is None else float(PITCH_MEASURED)   # 1차: 지평선을 영상 중앙(pitch 0)으로 보고 추정
+for _ in range(2 if PITCH_MEASURED is None else 1):  # 2차: 1차 pitch 의 지평선 아래만 써서 다시
     masks = [real.lane_mask(static_frames[i], real.horizon_row(K_FULL, PITCH) + V_MARGIN) for i in static_idx]
-    PITCH, cand, costs, gaps = real.estimate_pitch(masks, K_FULL)
-GAP_H = float(np.nanmean(gaps[:, list(cand).index(PITCH)]))      # 차선 간격 / 카메라 높이
+    best, cand, costs, gaps = real.estimate_pitch(masks, K_FULL)
+    PITCH = best if PITCH_MEASURED is None else float(cand[np.argmin(np.abs(cand - PITCH_MEASURED))])
+PITCH_SOURCE = "estimated from static frames" if PITCH_MEASURED is None else "PITCH_MEASURED"
+GAP_H = float(np.nanmean(gaps[:, list(cand).index(PITCH)]))      # 차선 간격 / 카메라 높이 (정지 구간 프레임)
+if not np.isfinite(GAP_H):                           # 정해 준 pitch 로는 정지 프레임에서 두 차선이 안 잡힘
+    if CAM_HEIGHT_MEASURED is None:
+        raise ValueError(f"pitch {PITCH:+.2f} 도로는 정지 구간 프레임에서 두 차선이 안 잡힘. pitch 값을 확인하거나 CAM_HEIGHT_MEASURED 도 넣을 것.")
+    GAP_H = LANE_WIDTH_MEASURED / CAM_HEIGHT_MEASURED
 
 if CAM_HEIGHT_MEASURED is not None:
     HEIGHT, HEIGHT_SOURCE = CAM_HEIGHT_MEASURED, "measured height"
@@ -218,7 +257,7 @@ np.save(H_FILE, H_I2G)
 cfg.camera.h_i2g_file = H_FILE
 V_MIN = real.horizon_row(K_FULL, PITCH) + V_MARGIN
 
-print(f"pitch = {PITCH:+.2f} deg (negative = tilted up), horizon row {real.horizon_row(K_FULL, PITCH):.0f} px (full res)")
+print(f"pitch = {PITCH:+.2f} deg ({PITCH_SOURCE}; negative = tilted up), horizon row {real.horizon_row(K_FULL, PITCH):.0f} px (full res)")
 print(f"lane gap = {GAP_H:.2f} x height -> height {HEIGHT:.3f} m ({HEIGHT_SOURCE}), lane width {LANE_W:.2f} m")
 print("saved", H_FILE)
 
@@ -227,9 +266,10 @@ for row in costs:
     ax[0].plot(cand, row, color="gray", alpha=0.3, lw=0.8)
 seen = ~np.isnan(costs).all(axis=0)                  # 두 차선이 하나도 안 잡힌 pitch 후보는 빼고
 ax[0].plot(cand[seen], np.nanmean(costs[:, seen], axis=0), "b", lw=2, label="mean")
-ax[0].axvline(PITCH, color="r", ls="--", label=f"best {PITCH:+.2f} deg")
+ax[0].axvline(PITCH, color="r", ls="--", label=f"{'best' if PITCH_MEASURED is None else 'given'} {PITCH:+.2f} deg")
 ax[0].set(xlabel="pitch [deg]", ylabel="std/mean of lane gap", ylim=(0, 0.4),
-          title=f"Lane parallelism over {len(static_idx)} static frames"); ax[0].legend()
+          title=f"Lane parallelism over {len(static_idx)} static frames")
+ax[0].legend()
 ax[1].imshow(masks[0], cmap="gray"); ax[1].set_title("Yellow tape mask (above horizon ignored)"); ax[1].axis("off")
 plt.tight_layout(); plt.show()
 ''')
@@ -252,7 +292,7 @@ def draw_grid(img, H_g2i, xs=(0.5, 1.0, 1.5, 2.0, 3.0), ys=(-0.8, -0.4, 0.0, 0.4
         cv2.putText(out, f"{x:g}m", tuple(uv[2] + [4, -4]), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
     return out
 
-demo_cam = real.to_camsim(undistort(real.decode_image(msgs[60])), cfg)
+demo_cam = real.to_camsim(undistort(real.decode_image(msgs[DEMO_IDX[0]])), cfg)
 H_assumed = camera.build(config.load())[0]          # config.yaml 기본 카메라
 H_cam = camera.build(cfg)[0]                        # h_i2g_file 이 들어간 cfg -> 실차 카메라
 show(viz.side_by_side(draw_grid(demo_cam, H_assumed), draw_grid(demo_cam, H_cam)), width=1000,
@@ -272,7 +312,7 @@ except ImportError:
 else:
     cache = {i: undistort(real.decode_image(m)) for i, m in msgs.items()}
 
-    @interact(idx=SelectionSlider(options=sorted(cache), value=60, description="frame"),
+    @interact(idx=SelectionSlider(options=sorted(cache), value=DEMO_IDX[0], description="frame"),
               pitch=FloatSlider(value=PITCH, min=-12, max=4, step=0.25, description="pitch [deg]"),
               height=FloatSlider(value=HEIGHT, min=0.08, max=0.40, step=0.005, description="height [m]"))
     def _(idx, pitch, height):
@@ -302,16 +342,20 @@ pose = np.array([*trk.center[i_straight], trk.heading[i_straight]])
 
 vis_mask = render.bev_visibility_mask(H_cam, cfg)
 bev_sim = render.render_bev(pose, trk.quads, trk_cfg, vis_mask)
-bev_real = real.bev_from_camera(undistort(real.decode_image(msgs[60])), H_I2G, cfg)
+bev_real = real.bev_from_camera(undistort(real.decode_image(msgs[DEMO_IDX[0]])), H_I2G, cfg)
 floor = np.all(bev_real == cfg.lane.color_floor, axis=-1)
 print(f"BEV {bev_real.shape[1]}x{bev_real.shape[0]}, visible area: sim mask {vis_mask.mean()*100:.0f} %, "
       f"real IPM {(~floor).mean()*100:.0f} %, agreement {(vis_mask == ~floor).mean()*100:.1f} %")
-show(viz.side_by_side(bev_sim, bev_real), width=700, title="sim BEV (straight section, same camera) | real BEV (frame 60)")
+show(viz.side_by_side(bev_sim, bev_real), width=700, title=f"sim BEV (straight section, same camera) | real BEV (frame {DEMO_IDX[0]})")
 ''')
 
 # =========================================================================== 5. 라벨링
 md('''
-## 5. waypoint 자동 라벨링
+## 5. 라벨링
+시뮬은 정답이 자동으로 나왔음. 실차는 아무도 정답을 모름. 그래서 5-1 에서 노란 테이프로 정답을 **자동으로** 찾고,
+5-2 에서 사람이 **직접 찍어서** 고치고, 5-3 에서 둘을 비교함.
+
+### 5-1 자동 라벨
 정답 기준은 camsim `gt.waypoint_ahead` 와 같음: **중심선 위, 후륜축에 가장 가까운 점에서 호길이 `ahead_m` 앞의 점** (후륜축 기준 x, y).
 
 1. 원본 해상도 영상에서 노란 테이프 마스크 -> 지면 격자로 폄 (전방 0.3~2.5 m). 먼저 펴고 색을 고르면 먼 테이프가 흐려져서 놓침
@@ -360,7 +404,7 @@ frames["valid"] = (frames["status"] == "two_lanes") & np.isfinite(WPS[:, 0]) & ~
 frames["use"] = frames["valid"] & ~(frames["static"] & SKIP_STATIC)
 print(f"labeled {len(frames)} frames in {time.time() - t0:.0f}s")
 print(frames["status"].value_counts().to_string())
-print(f"valid {frames['valid'].sum()}, jump {frames['jump'].sum()}, used for dataset {frames['use'].sum()}")
+print(f"valid {frames['valid'].sum()}, jump {frames['jump'].sum()}, usable for dataset {frames['use'].sum()} (before 5-2 clicks)")
 
 fig, ax = plt.subplots(figsize=(12, 3.5))
 ax.plot(t_s, WPS[:, 0], label="wp_x (forward)"); ax.plot(t_s, WPS[:, 1], label="wp_y (+left)")
@@ -371,14 +415,78 @@ ax.set(xlabel="time [s]", ylabel="[m]", title=f"Waypoint {cfg.waypoints.ahead_m:
 ax.legend(); ax.grid(alpha=0.3); plt.show()
 ''')
 
+md('''
+### 5-2 직접 찍기 (클릭)
+자동 라벨은 테이프가 안 보이거나 하나만 보이면 틀리거나 포기함. 그래서 사람이 정답을 찍는 단계가 필요함.
+`CLICK_EVERY_S`(0.5초)마다 한 장씩 BEV 를 띄움 (정지 구간은 건너뜀). 십자 = 뒷바퀴 축, 점선 원 = 뒷바퀴 축에서 1 m.
+
+1. **원이 좌우 테이프의 가운데와 만나는 곳을 클릭** (점이 원 위에 붙음, 드래그로 옮김)
+2. 맞으면 **Enter**(승인) → 다음 프레임. 가운데를 모르겠으면(테이프가 안 보임, 흐림) **X**(제외)
+3. **←, →** 로 앞뒤 이동, "다음 미작업" 으로 남은 프레임
+
+키보드가 안 먹으면 화면을 한 번 클릭. 라벨은 누를 때마다 `out/real/<bag 폴더 이름>_clicks.json` 에 저장되고
+(드라이브에 둔 내 bag 이면 그 폴더에), 셀을 다시 실행해도 남아 있음 (같은 bag 의 같은 프레임, 같은 카메라 자세일 때).
+승인한 점은 6장 데이터셋에서 자동 라벨 대신 쓰이고, 제외한 프레임은 데이터셋에서 빠짐. 다 안 찍어도 다음 장으로 넘어갈 수 있음.
+
+**모두 실행**으로 돌렸으면 다른 셀이 도는 동안은 클릭이 안 먹음. 끝까지 다 돈 뒤에 찍고, **6장부터 다시 실행**할 것.
+''')
+code('''
+start = STATIC_END if SKIP_STATIC else 0                 # 정지 구간은 거의 같은 그림이라 건너뜀
+step = max(1, int(round(FPS * CLICK_EVERY_S)))           # 37 Hz bag 이면 19장에 한 장
+CLICK_IDX = list(range(start, N_FRAMES, step))
+click_msgs = real.load_images(BAG_DIR, CLICK_IDX)
+click_bevs = [real.bev_from_camera(undistort(real.decode_image(click_msgs[i])), H_I2G, cfg) for i in CLICK_IDX]
+del click_msgs
+CLICK_DIR = Path(BAG_DIR) if str(BAG_DIR).startswith("/content/drive") else Path("out/real")   # 드라이브 bag 이면 옆에 저장
+CLICK_FILE = CLICK_DIR / f"{Path(BAG_DIR).name}_clicks.json"                                   # bag 마다 따로
+labeler = week3_lab.Labeler([dict(stamp_ns=int(stamps[i])) for i in CLICK_IDX], click_bevs, cfg, CLICK_FILE)
+print(f"클릭할 프레임 {len(CLICK_IDX)}장 ({step}장에 한 장, {step / FPS:.2f}초 간격)")
+labeler.show()
+''')
+code('''
+labeler.counts()      # 다 찍었으면 실행해서 확인
+''')
+
+md('''
+### 5-3 자동 라벨과 비교
+같은 프레임에서 5-1 의 자동 라벨과 내가 찍은 점을 비교함.
+
+- 자동 라벨이 없는 프레임: 차선 둘을 못 찾았거나 앞뒤와 비교해 튀어서 뺀 것. 사람은 찍을 수 있었는지 볼 것
+- 둘 다 있는 프레임의 차이가 몇 cm 인지. 정의가 조금 달라서(자동 = 중심선 **따라** 1 m, 클릭 = 1 m **원** 위) 몇 cm 는 정상.
+  크게 다르면 어느 쪽이 맞는지 BEV 를 보고 판단
+''')
+code('''
+auto = np.where(frames["valid"].to_numpy()[CLICK_IDX, None], WPS[CLICK_IDX], np.nan)   # 5-1 이 쓸 수 있다고 본 자동 라벨
+mine = np.array([l["waypoint_m"] if l["status"] == "accepted" else [np.nan, np.nan] for l in labeler.labels],
+                float).reshape(-1, 2)
+has_auto, has_mine = np.isfinite(auto).all(1), np.isfinite(mine).all(1)
+both = has_auto & has_mine
+gap_cm = np.where(both, np.hypot(*(auto - mine).T) * 100, np.nan)
+print(f"자동 라벨 {has_auto.sum()} / {len(CLICK_IDX)}장 | 내가 승인 {has_mine.sum()}장 | 둘 다 있음 {both.sum()}장")
+print("자동 라벨이 없는 프레임:", [CLICK_IDX[k] for k in np.flatnonzero(~has_auto)])
+if both.any():
+    print(f"둘의 차이: 평균 {np.nanmean(gap_cm):.1f} cm, 최대 {np.nanmax(gap_cm):.1f} cm")
+worst = [int(k) for k in np.argsort(-np.nan_to_num(gap_cm, nan=-1))[:4] if both[k]]   # 차이가 큰 순
+if worst:
+    fig, axes = plt.subplots(1, len(worst), figsize=(12, 4.5), squeeze=False)
+    for ax, k in zip(axes[0], worst):
+        img = click_bevs[k].copy()
+        render.draw_points_bev(img, mine[k], cfg, (0, 200, 0), 7)      # 초록: 내가 찍은 점
+        render.draw_points_bev(img, auto[k], cfg, (255, 128, 0), 5)    # 파랑: 자동 라벨
+        ax.imshow(img[..., ::-1]); ax.set_title(f"frame {CLICK_IDX[k]}: {gap_cm[k]:.0f} cm apart"); ax.axis("off")
+    plt.suptitle("green: my click   blue: auto label"); plt.show()
+''')
+
 # =========================================================================== 6. 저장
 md('''
 ## 6. 데이터셋 저장 (camsim 포맷)
+5-1 의 자동 라벨에 5-2 에서 찍은 것을 덮어씀: **승인한 프레임은 내 점**, 제외한 프레임은 뺌, 나머지는 자동 라벨 그대로.
+내 점은 1 m 원 위, 자동 라벨은 중심선을 따라 1 m 라서 몇 cm 다를 수 있음 (5-3).
 ```
 out/real_dataset/
 ├── images/NNNNNN.png     실차 BEV 380x300 (파일명 = bag 프레임 번호)
 ├── labels.csv            file, x, y, theta, wp_x, wp_y   <- DiskDataset 이 읽는 포맷 그대로
-├── frames.csv            전체 프레임의 상태·플래그 (valid, jump, static)
+├── frames.csv            전체 프레임의 상태·플래그 (valid, jump, static, label = auto / click / rejected)
 └── real_spec.json        bag, K, D, pitch, 높이, H_i2g 등 만든 설정
 ```
 - 실차엔 world pose 가 없어서 `labels.csv` 의 x, y, theta 는 nan. 학습엔 wp 만 쓰므로 상관없음.
@@ -387,6 +495,19 @@ out/real_dataset/
   평가는 `split="all"` 로, 학습에 섞을 거면 시간 구간(또는 bag) 단위로 나눌 것.
 ''')
 code('''
+WPS_DS = WPS.copy()                                 # 데이터셋에 쓸 라벨: 자동 라벨에 5-2 클릭을 덮어씀
+frames["label"] = "auto"
+for i, l in zip(CLICK_IDX, labeler.labels):
+    if l["status"] == "accepted":
+        WPS_DS[i] = l["waypoint_m"]
+        frames.loc[i, "label"] = "click"
+    elif l["status"] == "rejected":
+        frames.loc[i, "label"] = "rejected"
+frames["wp_x"], frames["wp_y"] = WPS_DS[:, 0].round(4), WPS_DS[:, 1].round(4)
+frames["use"] = ((frames["valid"] | (frames["label"] == "click")) & (frames["label"] != "rejected")
+                 & ~(frames["static"] & SKIP_STATIC))
+print("label of the frames used:", frames.loc[frames["use"], "label"].value_counts().to_dict())
+
 if Path(DATA_OUT).exists():
     shutil.rmtree(DATA_OUT)                         # 다시 실행하면 새로 만듦
 use = set(frames.loc[frames["use"], "frame"])
@@ -394,15 +515,19 @@ files = {}
 with real.LabelWriter(DATA_OUT) as w:
     for i, t, msg in real.iter_images(BAG_DIR):
         if i in use:
-            files[i] = w.add(real.bev_from_camera(undistort(real.decode_image(msg)), H_I2G, cfg), WPS[i], f"{i:06d}.png")
+            files[i] = w.add(real.bev_from_camera(undistort(real.decode_image(msg)), H_I2G, cfg), WPS_DS[i], f"{i:06d}.png")
 frames["file"] = frames["frame"].map(files)
 frames.to_csv(f"{DATA_OUT}/frames.csv", index=False)
 spec = {"bag": str(BAG_DIR), "n": len(files), "K": K_FULL.tolist(), "D": D.tolist(), "full_size": list(FULL_SIZE),
-        "pitch_deg": PITCH, "height_m": HEIGHT, "height_source": HEIGHT_SOURCE, "offset_x_m": OFFSET_X_M,
-        "lane_width_m": LANE_W, "ahead_m": cfg.waypoints.ahead_m, "bev": vars(cfg.bev), "H_i2g": H_I2G.tolist()}
+        "pitch_deg": PITCH, "pitch_source": PITCH_SOURCE, "height_m": HEIGHT, "height_source": HEIGHT_SOURCE,
+        "offset_x_m": OFFSET_X_M, "lane_width_m": LANE_W, "ahead_m": cfg.waypoints.ahead_m, "bev": vars(cfg.bev),
+        "H_i2g": H_I2G.tolist()}
 Path(f"{DATA_OUT}/real_spec.json").write_text(json.dumps(spec, indent=1))
 size_mb = sum(p.stat().st_size for p in Path(DATA_OUT).rglob("*") if p.is_file()) / 1e6
 print(f"saved {len(files)} BEV images + labels.csv -> {DATA_OUT} ({size_mb:.0f} MB)")
+if len(files) < 5:
+    raise ValueError(f"데이터셋이 {len(files)}장뿐임. 7장에서 20% 를 검증용으로 떼고 학습하려면 5장 이상 필요함. "
+                     "5-2 에서 제외(X)를 줄이거나 더 긴 bag 을 쓸 것.")
 ''')
 
 md('''
@@ -422,7 +547,7 @@ if dataset is not None:
     x, y = ds_real[0]
     print(f"DiskDataset: {len(ds_real)} samples, input {tuple(x.shape)}, target {y.numpy().round(3)} (x, y) / norm_m")
 
-pick = lab_df.sample(4, random_state=0).sort_values("file")
+pick = lab_df.sample(min(4, len(lab_df)), random_state=0).sort_values("file")
 tiles = []
 for _, r in pick.iterrows():
     bev = cv2.imread(f"{DATA_OUT}/images/{r.file}")
@@ -436,11 +561,11 @@ writer = None
 for i, t, msg in real.iter_images(BAG_DIR):
     img = undistort(real.decode_image(msg))
     front, bev = real.to_camsim(img, cfg), real.bev_from_camera(img, H_I2G, cfg)
-    if np.isfinite(WPS[i, 0]):
-        render.draw_points(front, WPS[i], H_cam); render.draw_points_bev(bev, WPS[i], cfg)
+    if np.isfinite(WPS_DS[i, 0]):
+        render.draw_points(front, WPS_DS[i], H_cam); render.draw_points_bev(bev, WPS_DS[i], cfg)
     panel = viz.side_by_side(front, cv2.resize(bev, None, fx=400 / 380, fy=400 / 380))
     r = frames.loc[i]
-    cv2.putText(panel, f"frame {i} {r.status} {'used' if r.use else 'skipped'}", (10, 25),
+    cv2.putText(panel, f"frame {i} {r.status} {r.label} {'used' if r.use else 'skipped'}", (10, 25),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0) if r.use else (0, 0, 255), 2)
     if writer is None:
         writer = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*"mp4v"), 1e9 / np.diff(stamps).mean(),
@@ -457,8 +582,7 @@ except Exception as e:
 # =========================================================================== 7. 학습 테스트
 md('''
 ## 7. 실차 데이터로 학습 테스트
-6장에서 저장한 실차 데이터를 camsim 학습 코드(`train.train`)에 그대로 넣어 봄. **파이프라인이 끝까지 도는지 보는 테스트**이고,
-쓸 만한 모델을 만드는 단계는 아님. 데이터가 bag 하나 15초(400여 장)뿐이라 오래 돌리면 외워 버림.
+6장에서 저장한 실차 데이터를 camsim 학습 코드(`train.train`)에 그대로 넣어 봄.
 
 - **분할**: `DiskDataset` 의 기본 분할은 무작위 9:1 인데, 연속 프레임은 거의 같은 그림이라 val 에 train 과 같은 장면이 들어가 점수가 부풀려짐.
   그래서 **시간순**으로 앞쪽을 train, 마지막 `VAL_FRAC` 를 val 로 두고 경계에 `GAP` 프레임을 버림.
@@ -473,7 +597,7 @@ TRAIN_STEPS = 300
 TRAIN_BATCH = 16
 TRAIN_LR = 1e-3          # resnet18 이면 3e-4 (사전학습 가중치가 초반에 망가지지 않게)
 VAL_FRAC = 0.2           # 시간순 마지막 20 % 를 val
-GAP = 10                 # train/val 경계에서 버릴 프레임 수 (0.3 s). 경계 양쪽이 거의 같은 그림이라
+GAP = int(round(FPS * 0.3))   # train/val 경계에서 버릴 프레임 수 (0.3 s 어치). 경계 양쪽이 거의 같은 그림이라
 
 if dataset is None:
     print("torch not installed: skipped (Colab has torch)")
@@ -486,17 +610,22 @@ else:
     train_cfg.model.arch = TRAIN_ARCH
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     ds_all = dataset.DiskDataset(DATA_OUT, train_cfg, split="all")
-    order = np.argsort(ds_all.files)                       # 파일명 = bag 프레임 번호 -> 시간순
-    n_val = int(round(len(order) * VAL_FRAC))
-    tr_idx, va_idx = order[:len(order) - n_val - GAP], order[len(order) - n_val:]
+    frame_no = np.array([int(f.split(".")[0]) for f in ds_all.files])   # 파일명 = bag 프레임 번호
+    order = np.argsort(frame_no)                                         # 시간순
+    n_val = max(1, int(round(len(order) * VAL_FRAC)))
+    va_idx = order[len(order) - n_val:]
+    tr_idx = order[frame_no[order] < frame_no[va_idx[0]] - GAP]          # val 바로 앞 GAP 프레임(0.3 초)은 버림
+    if len(tr_idx) == 0:
+        raise ValueError("train 으로 쓸 프레임이 없음. 6장 데이터셋이 너무 적음.")
     ds_tr, ds_va = Subset(ds_all, tr_idx.tolist()), Subset(ds_all, va_idx.tolist())
     print(f"train {len(ds_tr)} (frames {ds_all.files[tr_idx[0]]}..{ds_all.files[tr_idx[-1]]}), "
           f"val {len(ds_va)} (frames {ds_all.files[va_idx[0]]}..{ds_all.files[va_idx[-1]]}), device {DEVICE}")
 
+    batch = min(TRAIN_BATCH, len(ds_tr))                   # 짧은 bag 이면 train 이 배치보다 적을 수 있음
     t0 = time.time()
-    net, hist = train.train(None, train_cfg, steps=TRAIN_STEPS, batch_size=TRAIN_BATCH, lr=TRAIN_LR, device=DEVICE,
+    net, hist = train.train(None, train_cfg, steps=TRAIN_STEPS, batch_size=batch, lr=TRAIN_LR, device=DEVICE,
                             out_path="out/real/model_real_test.pt", dataset=ds_tr, val_dataset=ds_va,
-                            val_batches=len(ds_va) // TRAIN_BATCH + 1, log_every=max(TRAIN_STEPS // 10, 1))
+                            val_batches=len(ds_va) // batch + 1, log_every=max(TRAIN_STEPS // 10, 1))
     print(f"trained {TRAIN_STEPS} steps in {time.time() - t0:.0f}s -> out/real/model_real_test.pt")
 
     st = [h["step"] for h in hist]
@@ -520,7 +649,7 @@ if dataset is not None:
     frame_no = np.array([int(f.split(".")[0]) for f in ds_all.files])
     fig, ax = plt.subplots(1, 2, figsize=(13, 3.2), sharex=True)
     for a, c, name in ((ax[0], 0, "wp_x (forward)"), (ax[1], 1, "wp_y (+left)")):
-        a.plot(frame_no[order], ds_all.wps[order, c], "k", lw=1, label="auto label")
+        a.plot(frame_no[order], ds_all.wps[order, c], "k", lw=1, label="label")
         a.plot(frame_no[tr_idx], p_tr[:, c], ".", ms=2, label="pred (train)")
         a.plot(frame_no[va_idx], p_va[:, c], ".", ms=2, label="pred (val)")
         a.set(xlabel="bag frame", ylabel="[m]", title=name); a.grid(alpha=0.3)
@@ -532,7 +661,7 @@ if dataset is not None:
         render.draw_points_bev(bev, ds_all.wps[k], cfg, (0, 255, 0))
         render.draw_points_bev(bev, pred.predict(ds_all.load_image(int(k))), cfg, (255, 0, 255))
         tiles.append(bev)
-    show(viz.side_by_side(*tiles), width=1000, title="val frames: green = auto label, magenta = model")
+    show(viz.side_by_side(*tiles), width=1000, title="val frames: green = label, magenta = model")
 ''')
 
 # =========================================================================== 8. camsim_lab
@@ -571,7 +700,7 @@ if IN_COLAB:
 
 md('''
 ### 학습된 모델로 실차 오차 재기 (선택)
-camsim_lab 5장이 드라이브에 올린 `model.pt` 경로를 `MODEL_PT` 에 넣으면, 실차 BEV 에서 예측한 waypoint 와 자동 라벨의 차이를 잼.
+camsim_lab 5장이 드라이브에 올린 `model.pt` 경로를 `MODEL_PT` 에 넣으면, 실차 BEV 에서 예측한 waypoint 와 6장 라벨의 차이를 잼.
 체크포인트의 BEV·waypoint·테이프 색·모델 구조 설정이 이 노트북의 `cfg` 와 다르면 `model.load` 가 거부함
 (camsim_lab 에서 바꾼 값이 있으면 여기 파라미터 셀에도 똑같이 넣을 것).
 
@@ -599,7 +728,73 @@ else:
         render.draw_points_bev(bev, ds_real.wps[ds_real.idx[k]], cfg, (0, 255, 0))
         render.draw_points_bev(bev, pred.predict(ds_real.load_image(int(k))), cfg, (255, 0, 255))
         tiles.append(bev)
-    show(viz.side_by_side(*tiles), width=1000, title="worst 4: green = auto label, magenta = model")
+    show(viz.side_by_side(*tiles), width=1000, title="worst 4: green = label, magenta = model")
+''')
+
+# =========================================================================== 9. 차
+md('''
+## 9. 학습한 모델을 차에서 돌리기
+7장에서 학습한 모델을 차에 옮겨서 돌림.
+차에서는 카메라 영상이 한 장 들어올 때마다 모델이 1 m 앞에서 가야 할 점(waypoint)을 찍고, 그 좌표를 `/waypoint` 토픽으로 보냄.
+주행 노드가 그 점을 받아서 그 점으로 가는 조향각을 계산하고 (2주차 시뮬레이터와 같은 pure pursuit), 조이스틱 RB 를 누르고 있는 동안 차를 달리게 함.
+
+아래 셀을 실행하면 차에 가져갈 파일 4개를 `out/car_model/` 폴더에 모음.
+코랩이면 이 폴더를 `car_model.zip` 으로 묶어서 구글 드라이브의 **내 드라이브 → `camsim_results` → `car_model.zip`** 에도 올림 (다시 실행하면 덮어씀).
+차에서는 레포의 `ros2/README.md` 를 순서대로 따라 하면 됨. 0-2 에서 이 zip 을 차로 받아서 풀고, A 에서 bag 으로 확인하고, B 에서 트랙을 달림.
+
+zip 안의 파일 4개:
+- `model.onnx` : 7장에서 학습한 모델
+- `checkpoint.json` : 모델 설정. 차에서 모델 파일이 맞는지 확인할 때 씀
+- `H_i2g.npy` : 3장에서 잰 카메라 기울기·높이로 만든 BEV 변환. 차에서도 학습 때와 똑같은 BEV 를 만듦
+- `ost.yaml` : 렌즈 왜곡을 펴는 값 (2장에서 쓴 것)
+
+차 카메라는 이 bag 을 녹화할 때와 같은 자리, 같은 각도여야 함. 카메라를 건드리면 BEV 가 틀어져서 모델이 엉뚱한 점을 찍음.
+''')
+code('''
+if dataset is None:
+    print("torch not installed: skipped (Colab has torch)")
+else:
+    from camsim import handoff
+    CAR_DIR = Path("out/car_model")
+    if CAR_DIR.exists():
+        shutil.rmtree(CAR_DIR)
+    onnx_path = model.export_onnx(net, train_cfg, "out/real/model.onnx")
+    commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+    handoff.export_checkpoint(Path(onnx_path), CAR_DIR, train_cfg, commit)
+    shutil.copy2(H_FILE, CAR_DIR / "H_i2g.npy")
+    shutil.copy2(OST_FILE, CAR_DIR / "ost.yaml")
+    print("saved", CAR_DIR, sorted(p.name for p in CAR_DIR.iterdir()))
+    if IN_COLAB:
+        from google.colab import drive
+        drive.mount("/content/drive")
+        dst = Path("/content/drive/MyDrive/camsim_results")
+        dst.mkdir(parents=True, exist_ok=True)
+        archive = shutil.make_archive("out/car_model", "zip", root_dir="out", base_dir="car_model")
+        shutil.copy2(archive, dst / "car_model.zip")
+        print("copied to", dst / "car_model.zip")
+''')
+
+# =========================================================================== 정리
+md('''
+## 정리
+- 녹화(rosbag) → 디코딩·왜곡 보정 → 카메라 자세 추정 → BEV (IPM) → 자동 라벨 + 사람이 찍은 라벨 → camsim 형식 데이터셋 → 같은 코드로 학습
+- 자동 라벨과 사람 라벨이 언제 갈리는지, 자동이 못 한 프레임은 어떤 장면이었는지 볼 것
+- 400장이 아니라 4000장이 필요하면 어떤 장면을 더 녹화해야 할지 생각해 볼 것 (조명, 코너, 반대 방향, 다른 트랙)
+''')
+md('''
+## 내 bag 으로 하기
+1. 차에서 레포의 `rosbag/README.md` 순서대로 녹화함. 출발 전 3초 이상 세워 둘 것 (3장 pitch 추정에 씀).
+   파일이 크면 0.5초에 한 장으로 줄여도 됨 (`rosbag/README.md` 5번). 줄인 bag 도 이 노트북이 그대로 읽음
+2. bag 폴더(`metadata.yaml` + `.db3`)에 그 카메라의 `ost.yaml` 을 같이 넣어서 노트북 컴퓨터로 가져오고(scp 나 USB),
+   **구글 드라이브**의 `내 드라이브/week3/` 에 올림. 런타임이 끊겨도 남고, 다음에 또 쓸 수 있음
+3. 0장 파라미터 셀의 `BAG_DIR` 을 아래처럼 바꿔서 그 셀부터 다시 실행. 드라이브 경로면 다음 셀이 드라이브를 연결함
+   (처음 한 번 구글 계정 허용 창이 뜸). 차선 간격이 다르면 `LANE_WIDTH_MEASURED` 도 바꿈.
+   1장이 "출발 전 정지 구간이 ...초뿐임" 이라고 하면 3장 결과를 의심할 것. 따로 잰 값이 있으면 `PITCH_MEASURED`,
+   `CAM_HEIGHT_MEASURED` 에 넣음 (카메라 마운트를 안 건드렸으면 전에 같은 차로 잰 값)
+
+```python
+BAG_DIR = "/content/drive/MyDrive/week3/my_run_2hz"     # metadata.yaml, .db3, ost.yaml 이 있는 폴더
+```
 ''')
 
 nb = {"cells": cells,

@@ -13,3 +13,6 @@ __pycache__
 
 # 발표자료 (바이너리. 레포에 넣으면 clone 할 때마다 받아야 한다)
 *.pptx
+
+# 차에서 녹화한 bag (rosbag/README.md). 1분에 약 5 GB
+/data/

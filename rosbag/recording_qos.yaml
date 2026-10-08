@@ -1,0 +1,13 @@
+# ros2 bag record --qos-profile-overrides-path 로 넘기는 구독 설정 (rosbag/README.md 3번).
+# 카메라 영상은 best effort 로 받음. 카메라가 reliable 로 보내든 best effort 로 보내든 받아짐.
+/flir_camera/image_raw:
+  history: keep_last
+  depth: 5
+  reliability: best_effort
+  durability: volatile
+# /tf_static 도 녹화할 때만 씀 (docs/real_ipm_manual.md 2.2)
+/tf_static:
+  history: keep_last
+  depth: 100
+  reliability: reliable
+  durability: transient_local
