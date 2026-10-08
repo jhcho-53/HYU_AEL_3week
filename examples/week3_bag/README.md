@@ -1,7 +1,8 @@
 # 3주차 예제 bag
 
-조교 차(F1TENTH, FLIR Blackfly S)로 2026-10-06 실습실 트랙을 천천히(최고 1.5 m/s) 달리며 녹화한 것.
-`notebooks/week3_label_train.ipynb` 가 씀. `notebooks/real_ipm_lab.ipynb` 가 구글 드라이브에서 받는 원본 bag(1.3 GB)과 같은 주행.
+트랙을 천천히(최고 1.5 m/s) 달리며 녹화한 것.
+`notebooks/real_ipm_lab.ipynb` 가 구글 드라이브에서 받는 원본 bag(1.3 GB)과 같은 주행이고, 드라이브에서 못 받으면 노트북이 대신 씀.
+클릭 라벨링 테스트(`camsim/tests/test_week3_lab.py`)도 씀.
 
 | 파일 | 내용 |
 |---|---|
@@ -10,13 +11,7 @@
 
 bag 토픽: `/flir_camera/image_raw` (`sensor_msgs/Image`, `bayer_rggb8`, 1920×1200), `/flir_camera/camera_info`.
 
-카메라 자세(pitch −4.25°, 높이 0.178 m)는 `real_ipm_lab` 3장이 원본 bag 에서 추정한 값이고, 노트북 파라미터 셀에 적혀 있음
-(`camsim/week3_lab.py` 의 `SAMPLE_*` 와 같음).
+카메라 자세(pitch −4.25°, 높이 0.178 m)는 `real_ipm_lab` 3장이 원본 bag 에서 추정한 값이고, 테스트가 쓰는
+`camsim/week3_lab.py` 의 `SAMPLE_*` 와 같음. 이 예제 bag 으로 3장을 돌려도 pitch −4.25°, 높이 0.179 m 가 나옴.
 
-녹화한 명령 (차에서):
-
-```bash
-ros2 bag record --storage sqlite3 --output data/bags/run_train2 /flir_camera/image_raw /flir_camera/camera_info
-```
-
-0.5초에 한 장으로 줄인 명령 (차에서, ROS 필요): `python3 camsim/scripts/decimate_bag.py data/bags/run_train2_part1 data/bags/run_train2_part1_2hz 20`
+차에서 녹화하는 명령은 [rosbag/README.md](../../rosbag/README.md).

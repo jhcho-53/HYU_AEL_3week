@@ -1,10 +1,11 @@
-"""3주차 클릭 라벨링 노트북(notebooks/week3_label_train.ipynb)의 도우미.
+"""실차 IPM 노트북(notebooks/real_ipm_lab.ipynb) 5-2 장의 클릭 라벨링 도우미.
 
-rosbag2 를 ROS 없이 읽고(`rosbags`), real_ipm_lab 과 같은 경로로 BEV 를 만들고, Colab 에서 클릭으로 라벨을 찍고,
-camsim_lab 과 같은 형식의 데이터셋(images/*.png + labels.csv) 을 씀. `dataset.DiskDataset` 이 그대로 읽음.
+`Labeler` 가 Colab 에서 BEV 에 1 m 앞 점을 찍는 화면을 띄우고, 누를 때마다 라벨을 JSON 으로 저장함.
+노트북은 드라이브에서 bag 을 못 받으면 `SAMPLE` 의 예제 bag 으로 넘어감.
 
-BEV 는 real.py 의 함수로 만듦: ost.yaml 로 왜곡 보정 -> `real.camsim_h_i2g` -> `real.bev_from_camera`.
-카메라 자세(pitch, 높이)는 real_ipm_lab 3장이 bag 에서 추정한 값을 숫자로 받음 (그 노트북을 먼저 돌릴 필요 없음).
+그 밖의 함수(rosbag2 를 ROS 없이 읽기, real.py 와 같은 경로의 BEV 와 자동 라벨, camsim_lab 과 같은 형식의 데이터셋 쓰기)는
+예제 bag 으로 이 모듈을 검사하는 테스트가 씀. BEV 는 real.py 의 함수로 만듦: ost.yaml 로 왜곡 보정 -> `real.camsim_h_i2g`
+-> `real.bev_from_camera`.
 """
 import base64
 import csv
@@ -19,7 +20,7 @@ import numpy as np
 from . import real
 from .real import IMAGE_TOPIC, LABEL_HEADER
 
-MIN_ACCEPTED = 5          # 노트북이 20 % 를 검증용으로 떼므로 최소 한 장은 남아야 함
+MIN_ACCEPTED = 5          # write_dataset 의 최소 승인 수: 20 % 를 검증용으로 떼도 한 장은 남게
 SAMPLE = Path(__file__).resolve().parents[1]/'examples'/'week3_bag'
 LABELER_JS = Path(__file__).with_name('week3_labeler.js')
 # examples/week3_bag 의 카메라: real_ipm_lab 3장이 원본 bag(run_train2_part1) 에서 추정한 값 (docs/real_ipm_manual.md 2절)
@@ -184,10 +185,10 @@ def png_url(image):
 
 
 class Labeler:
-    """read_frames 의 프레임별 BEV 에 클릭 라벨: ahead_m 원 위의 점 하나, 또는 'rejected'.
+    """프레임별 BEV 에 클릭 라벨: ahead_m 원 위의 점 하나, 또는 'rejected'. frames 는 stamp_ns 만 있으면 됨.
 
     바뀔 때마다 프레임 stamp 와 BEV 의 해시와 함께 JSON 으로 저장: 셀을 다시 실행해도 클릭이 남고,
-    다른 bag, every_s, 카메라 자세면 새로 시작함.
+    다른 bag, 다른 프레임 간격, 다른 카메라 자세면 새로 시작함.
     """
 
     def __init__(self, frames, bevs, cfg, path):

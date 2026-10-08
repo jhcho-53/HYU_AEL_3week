@@ -63,11 +63,13 @@
 2. **0장 파라미터 셀**에서 `LANE_WIDTH_MEASURED` 등을 확인하고 위에서부터 순서대로 실행한다.
 3. 첫 실행 때 bag (약 1.3 GB) 을 `DRIVE_FOLDER_URL` 의 구글 드라이브 폴더에서 `out/real_bag/` 으로 받는다.
    다른 bag 을 쓰려면 드라이브 폴더 공유를 "링크가 있는 모든 사용자"로 바꾸고 그 주소를 넣는다.
-4. 전체 실행은 다운로드 빼고 2~3분.
+4. 전체 실행은 다운로드와 5장 클릭 시간 빼고 2~3분. 5-2 클릭 화면은 코랩에서만 뜬다.
+5. 드라이브에서 bag 을 못 받으면 (여러 명이 한꺼번에 받아 막히는 경우 등) 레포 안 예제 bag
+   (`examples/week3_bag/`, 같은 주행을 0.5초에 한 장으로 줄인 것) 으로 넘어간다.
 
 ### 3.2 로컬
 ```bash
-pip install rosbags gdown opencv-python-headless pyyaml pandas matplotlib imageio-ffmpeg
+pip install rosbags==0.11.5 gdown opencv-python-headless pyyaml pandas matplotlib imageio-ffmpeg
 ln -s /path/to/bag_folder out/real_bag        # 이미 받은 bag 이 있으면 다운로드 대신 연결
 jupyter notebook notebooks/real_ipm_lab.ipynb
 ```
@@ -79,11 +81,14 @@ torch 는 6장의 `DiskDataset` 확인, 7장 학습 테스트, 8장 모델 평�
 |---|---|---|
 | `cfg.waypoints.ahead_m` | 1.0 | 라벨 waypoint 의 전방 호길이 (m). **camsim_lab 과 같아야 함** |
 | `BAG_DIR` | `out/real_bag` | bag 폴더 |
+| `OST_FILE` | `BAG_DIR` 안의 `ost.yaml` | 그 카메라의 렌즈 캘리브레이션 |
 | `DRIVE_FOLDER_URL` | 3주차 bag 폴더 | `BAG_DIR` 이 비어 있을 때 받아 올 곳 |
 | `LANE_WIDTH_MEASURED` | 0.80 | 실측 차선 간격 (m) |
 | `CAM_HEIGHT_MEASURED` | None | 실측 카메라 높이 (m). 넣으면 우선 |
+| `PITCH_MEASURED` | None | pitch (도). 넣으면 3장 추정 대신 씀. 정지 구간이 짧은 bag 용 (마운트를 안 건드렸으면 전에 같은 차로 잰 값) |
 | `OFFSET_X_M` | 0.0 | 후륜축 -> 카메라 전방 거리 (m) |
 | `SKIP_STATIC` | True | 정지 구간 프레임(거의 같은 그림)을 데이터셋에서 뺌 |
+| `CLICK_EVERY_S` | 0.5 | 5-2 에서 직접 찍을 프레임 간격 (초) |
 
 ## 4. 장별 확인 항목
 각 장 출력에서 아래가 맞는지 보고 넘어간다. 아니면 7절 문제 해결.
@@ -94,8 +99,8 @@ torch 는 6장의 `DiskDataset` 확인, 7장 학습 테스트, 8장 모델 평�
 | 2. 디코딩 | 오른쪽 그림에서 테이프가 **노란색**인지 (하늘색이면 Bayer 패턴 문제) | 실측 화각 85.2 도 (config 가정 90 도) |
 | 3. extrinsic | pitch 그래프에 뚜렷한 최소점. 오른쪽 격자의 하늘색 선이 테이프와 나란한지 | pitch -4.25 도, 높이 0.178 m |
 | 4. BEV 비교 | 시뮬과 실차 BEV 의 회색(안 보이는 곳) 모양 일치율 | 99.9 % |
-| 5. 라벨링 | 상태가 대부분 `two_lanes`, 초록 점이 두 테이프 사이 | 556/556 `two_lanes`, 튐 0 |
-| 6. 저장 | `DiskDataset` 이 읽히는지, 미리보기 영상에서 빨간(skipped) 프레임 확인 | 439 장, 75 MB |
+| 5. 라벨링 | 상태가 대부분 `two_lanes`, 초록 점이 두 테이프 사이. 5-2 클릭 화면이 뜨고, 5-3 의 클릭과 자동 라벨 차이가 몇 cm | 556/556 `two_lanes`, 튐 0, 클릭할 프레임 24장 |
+| 6. 저장 | `DiskDataset` 이 읽히는지, 미리보기 영상에서 빨간(skipped) 프레임 확인 | 클릭 안 했을 때 439 장, 75 MB |
 | 7. 학습 테스트 | 학습이 끝까지 돌고, val 오차가 상수 기준선보다 작은지 (데이터가 적어 train 과 차이는 큼) | 아래 6.3 참고 |
 
 ## 5. 결과물
@@ -103,11 +108,12 @@ torch 는 6장의 `DiskDataset` 확인, 7장 학습 테스트, 8장 모델 평�
 ```
 out/real/
 ├── H_i2g.npy              camsim 해상도(640x400) 이미지 px -> 후륜축 기준 지면 m (3x3)
+├── <bag 폴더 이름>_clicks.json   5-2 클릭 라벨 (프레임 stamp, BEV 해시, 승인한 점 / 제외 / 안 함). 드라이브 bag 이면 그 폴더에
 └── labels_preview.mp4     검수용. 전면 | BEV, 초록 = 라벨
 out/real_dataset/
 ├── images/NNNNNN.png      실차 BEV 380x300 BGR. 파일명 = bag 프레임 번호
 ├── labels.csv             file, x, y, theta, wp_x, wp_y   (DiskDataset 포맷. x, y, theta 는 nan)
-├── frames.csv             전체 프레임의 status, valid, jump, static, use, wp_x, wp_y, file
+├── frames.csv             전체 프레임의 status, valid, jump, static, label (auto / click / rejected), use, wp_x, wp_y, file
 └── real_spec.json         bag, K, D, pitch, height, height_source, offset, lane width, ahead_m, bev, H_i2g
 ```
 
@@ -116,7 +122,8 @@ out/real_dataset/
 - **라벨 정의**: 중심선 위에서 후륜축에 가장 가까운 점부터 중심선을 따라 `ahead_m` 간 점.
   camsim `gt.waypoint_ahead` 와 같은 정의다. 직선 거리로 잡으면 코너에서 점이 안쪽으로 파고든다.
 - **valid**: 두 차선 검출 + waypoint 계산됨 + 앞뒤 3프레임 중앙값에서 8 cm 넘게 튀지 않음.
-  `use` = valid 이고 (`SKIP_STATIC` 이면) 정지 구간이 아님. `labels.csv` 에는 `use` 프레임만 들어간다.
+  `use` = (valid 이거나 5-2 에서 승인) 이고, 5-2 에서 제외하지 않았고, (`SKIP_STATIC` 이면) 정지 구간이 아님.
+  `labels.csv` 에는 `use` 프레임만 들어간다. 승인한 프레임의 라벨은 클릭한 점 (1 m 원 위) 이다.
 
 ## 6. camsim_lab 과 연결
 
@@ -155,7 +162,7 @@ real_ipm_lab 8장에서 `MODEL_PT` 에 드라이브의 `model.pt` 경로를 넣�
 
 ### 6.3 실차 데이터로 학습 (real_ipm_lab 7장)
 real_ipm_lab 7장이 `out/real_dataset` 을 camsim `train.train` 에 그대로 넣어 짧게 학습해 본다.
-시간순으로 앞쪽 80 % 를 train, 마지막 20 % 를 val 로 두고 경계 10 프레임을 버린다. 기본은 `small` 모델 300 스텝이라 CPU 에서도 몇 분이면 끝난다.
+시간순으로 앞쪽 80 % 를 train, 마지막 20 % 를 val 로 두고 val 바로 앞 0.3 초 (37 Hz 면 11 프레임) 를 버린다. 기본은 `small` 모델 300 스텝이라 CPU 에서도 몇 분이면 끝난다.
 파이프라인 확인용이지 쓸 만한 모델을 만드는 단계는 아니다. bag 하나(400여 장)로는 외워 버리므로, 실차 데이터로 제대로 학습하려면
 bag 을 더 녹화하거나 시뮬 데이터와 `torch.utils.data.ConcatDataset` 으로 섞는다.
 `train.train` 은 항상 새 모델(ImageNet 가중치)에서 시작한다. 시뮬로 학습한 `model.pt` 에서 이어 학습하는 옵션은 아직 없다.
@@ -170,9 +177,10 @@ bag 을 더 녹화하거나 시뮬 데이터와 `torch.utils.data.ConcatDataset`
 
 | 증상 | 원인 | 해결 |
 |---|---|---|
-| bag 다운로드가 중간에 멈춤 | 구글 드라이브 대용량 파일 | 다운로드 셀 다시 실행. 계속 안 되면 직접 받아서 `BAG_DIR` 에 둠 |
+| bag 다운로드가 중간에 멈춤 | 구글 드라이브 대용량 파일 | 다운로드 셀 다시 실행. 계속 안 되면 직접 받아서 `BAG_DIR` 에 둠. 아예 못 받으면 노트북이 예제 bag 으로 넘어감 |
+| 5-2 클릭 화면이 안 뜸 | 로컬 Jupyter (코랩 콜백이 없음) | 코랩에서 연다. 안 찍어도 6장부터는 자동 라벨로 돈다 |
 | 테이프가 하늘색 | Bayer 패턴 이름 차이 | `real.decode_image` 를 쓰면 자동. 직접 바꿀 땐 ROS `rggb8` = OpenCV `BayerBG` |
-| `no pitch candidate sees two lanes` | 정지 구간이 없거나, 정지 구간에 차선이 하나만 보이거나, 테이프 색이 HSV 범위 밖 | 정지 상태로 다시 녹화. 아니면 3장의 `static_idx` 를 두 차선이 곧게 보이는 프레임 번호로 직접 지정. 색이면 `real.HSV_LO/HSV_HI` 조정 |
+| `no pitch candidate sees two lanes` | 정지 구간이 없거나, 정지 구간에 차선이 하나만 보이거나, 테이프 색이 HSV 범위 밖 | 정지 상태로 다시 녹화. 마운트를 안 건드렸으면 `PITCH_MEASURED` 에 이전 값을 넣음. 아니면 3장의 `static_idx` 를 두 차선이 곧게 보이는 프레임 번호로 직접 지정. 색이면 `real.HSV_LO/HSV_HI` 조정 |
 | pitch 그래프 최소점이 없거나 여러 개 | 정지 구간이 커브거나 마스크에 잡음 | 위와 같이 곧은 구간 프레임으로 지정 |
 | 3장 격자가 테이프와 안 나란함 | pitch 오추정, 또는 roll/yaw 가 0 이 아님 | 노트북 3장 "직접 바꿔 보기" 슬라이더로 확인. roll/yaw 가 크면 체커보드 + `cv2.solvePnP` 로 extrinsic 직접 측정 |
 | 5장에서 `one_lane_*`, `no_lane` 많음 | 조명·반사로 테이프 검출 실패, 트랙 밖 주행 | 미리보기 영상으로 해당 프레임 확인. 색 문제면 HSV 범위 조정 |
@@ -189,7 +197,8 @@ bag 을 더 녹화하거나 시뮬 데이터와 `torch.utils.data.ConcatDataset`
   높이·pitch·roll·yaw 를 한 번에 구한다. 그 결과로 `real.ground_homography` 대신 H 를 만들면 나머지 파이프라인은 그대로 쓴다.
 
 ## 9. 새 bag 추가
-1. 2절 조건대로 녹화하고 `ost.yaml` 과 같은 폴더에 둔다 (카메라가 같으면 `ost.yaml` 재사용).
+1. 2절 조건대로 녹화하고 (차에서 치는 명령은 [rosbag/README.md](../rosbag/README.md)) `ost.yaml` 과 같은 폴더에 둔다
+   (카메라가 같으면 `ost.yaml` 재사용).
 2. `BAG_DIR` (또는 `DRIVE_FOLDER_URL`) 과 `DATA_OUT` 을 bag 마다 다르게 해서 노트북을 다시 돌린다.
 3. 카메라 마운트가 그대로면 pitch·높이가 이전과 비슷하게 나와야 한다. 크게 다르면 마운트가 움직였거나 추정이 틀린 것.
 4. bag 별 데이터셋 폴더를 따로 두면 bag 단위 train/val 분할이 쉽다.

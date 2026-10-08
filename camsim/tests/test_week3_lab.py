@@ -18,7 +18,7 @@ from camsim import config, real, render, week3_lab as lab
 ROOT = Path(__file__).parents[2]
 BAG = lab.SAMPLE/'run_train2_part1_2hz'
 DB3 = BAG/'run_train2_part1_2hz_0.db3'
-NOTEBOOK = ROOT/'notebooks'/'week3_label_train.ipynb'
+NOTEBOOK = ROOT/'notebooks'/'real_ipm_lab.ipynb'      # 5-2 click labeling uses this module
 PAGE = Path(__file__).with_name('week3_labeler.js')
 SCENARIOS = re.findall(r'^  async (\w+)\(\)\{$', PAGE.read_text(), re.M)
 MS = 1_000_000
@@ -301,12 +301,13 @@ def test_page_html_carries_the_config_and_the_script(frames, bevs, tmp_path):
     assert lab.LABELER_JS.read_text() in html and 'id="cv"' in html
 
 
-def test_notebook_parameter_cell_carries_the_sample_camera():
-    """The students see the real_ipm_lab numbers as plain literals; they must be the ones the tests use."""
+def test_notebook_clicks_with_this_module_and_falls_back_to_the_sample():
+    """real_ipm_lab clicks with week3_lab.Labeler and reads the sample when Drive refuses the bag; the sample must exist."""
     source = '\n'.join(''.join(c['source']) for c in json.loads(NOTEBOOK.read_text())['cells'])
-    for line in (f'PITCH_DEG = {lab.SAMPLE_PITCH_DEG}', f'HEIGHT_M = {lab.SAMPLE_HEIGHT_M}',
-                 f'LANE_WIDTH_M = {lab.SAMPLE_LANE_WIDTH_M}', 'https://github.com/jhcho-53/HYU_AEL_3week'):
+    for line in ('https://github.com/jhcho-53/HYU_AEL_3week', 'week3_lab.Labeler(',
+                 'week3_lab.SAMPLE / "run_train2_part1_2hz"', 'week3_lab.SAMPLE / "ost.yaml"'):
         assert line in source, line
+    assert (BAG/'metadata.yaml').is_file() and (lab.SAMPLE/'ost.yaml').is_file()
 
 
 def test_text_students_read_is_eumseumche():
