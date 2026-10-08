@@ -32,7 +32,7 @@
 
 | 문서 | 내용 |
 |---|---|
-| [ros2/README.md](ros2/README.md) | **차에서 모델 돌리기.** real_ipm_lab 9장 모델로 카메라 영상 -> `/waypoint` (빌드 없이 python3 로 실행) |
+| [ros2/README.md](ros2/README.md) | **차에서 모델로 달리기.** real_ipm_lab 9장 모델로 카메라 영상 -> `/waypoint` -> pure pursuit -> `/drive`. 조이스틱 RB 를 누른 동안만 달림 (빌드 없이 python3 로 실행) |
 | [rosbag/README.md](rosbag/README.md) | **차에서 rosbag 녹화.** 카메라·차량 스택 켜기, 녹화, 확인, 0.5초에 한 장으로 줄이기 (학생이 그대로 따라 치는 명령) |
 | [docs/real_ipm_manual.md](docs/real_ipm_manual.md) | **실차 IPM 매뉴얼.** 녹화 조건, 실측할 것, 실행, 장별 확인 항목, 결과물 포맷, camsim_lab 연결, 문제 해결 |
 | [camsim/README.md](camsim/README.md) | camsim 설계. BEV 규격, waypoint 정의, 모델 구조, 증강, 실격 규칙, 젯슨 전달 |
@@ -43,7 +43,7 @@
     camsim/tests/      pytest. test_real.py 는 합성 영상으로 실차 파이프라인을, test_week3_lab.py 는 예제 bag 으로 클릭 라벨링 도우미를 검증
     notebooks/         실습 노트북. 원본은 camsim/scripts/build_notebook.py, build_real_notebook.py
     docs/              실차 IPM 매뉴얼
-    ros2/              차에서 쓰는 waypoint 노드(waypoint_node.py)와 켜는 명령(README.md). 9장의 car_model 폴더를 씀
+    ros2/              차에서 쓰는 모델 노드(waypoint_node.py), 주행 노드(drive_node.py)와 켜는 명령(README.md). 9장의 car_model 폴더를 씀
     rosbag/            차에서 rosbag 녹화하는 명령(README.md)과 녹화 구독 설정(recording_qos.yaml). bag 은 data/bags/ 에 쌓임 (git 제외)
     gym/f110_gym/      업스트림 시뮬레이터 (수정 없음)
     examples/          맵과 중심선. 트랙 지오메트리의 출처. week3_bag/ 은 드라이브가 막혔을 때 real_ipm_lab 이 대신 쓰는 예제 bag (2 Hz, 60 MB)
