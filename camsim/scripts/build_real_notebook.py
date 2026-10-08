@@ -64,7 +64,7 @@ if IN_COLAB:
         subprocess.run(["git", "clone", "-q", "--branch", "main", REPO_URL, "/content/f1tenth_gym"], check=True)
     subprocess.run(["git", "-C", "/content/f1tenth_gym", "pull", "-q", "--ff-only"], check=True)
     subprocess.run([sys.executable, "-m", "pip", "install", "-q", "rosbags==0.11.5", "gdown", "opencv-python-headless",
-                    "pyyaml", "imageio-ffmpeg"], check=True)
+                    "pyyaml", "imageio-ffmpeg", "onnx"], check=True)   # onnx: 9장 model.onnx 내보내기
 print("colab" if IN_COLAB else "local")
 ''')
 code('''
