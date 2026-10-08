@@ -108,7 +108,10 @@ const scenarios={
     assert.match(p.text('msg'),/남은 프레임은 "다음 미작업"을 눌러서 할 것/);
     p.els.todo.onclick();await p.settle();
     assert.strictEqual(p.text('pos'),'1 / 3');
-    await p.key('x');
+    await p.key('x');                           // the last unlabeled frame was the first one: done right there
+    assert.strictEqual(p.text('pos'),'1 / 3');
+    assert.match(p.text('msg'),/다 했음/);
+    assert.strictEqual(p.text('counts'),'승인 1 · 제외 2 · 미작업 0');
     p.els.todo.onclick();await p.settle();
     assert.match(p.text('msg'),/미작업 프레임 없음/);
   },

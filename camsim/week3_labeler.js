@@ -55,8 +55,9 @@ async function save(status){
   try{const r=await call('save',[index,status,...(status==='accepted'?point:[null,null])]);label=r.label;point=label.waypoint_m;show(r);saved=true}
   catch(e){msg(e.message)}finally{busy=false}
   if(!saved)return;
+  if(!statuses.includes('unlabeled')){draw();msg('다 했음. 아래 셀로 넘어갈 것');return}   // 어느 프레임에서 끝냈든
   if(index+1<CONFIG.n)await load(index+1);
-  else{draw();msg(statuses.includes('unlabeled')?'마지막 프레임. 남은 프레임은 "다음 미작업"을 눌러서 할 것':'다 했음. 아래 셀로 넘어갈 것')}
+  else{draw();msg('마지막 프레임. 남은 프레임은 "다음 미작업"을 눌러서 할 것')}
 }
 
 function nextTodo(){
