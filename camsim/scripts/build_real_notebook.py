@@ -34,13 +34,13 @@ md('''
   시뮬에서 학습한 모델의 **실차 오차**를 재거나, 실차 데이터로 추가 학습할 때 씀
 
 GPU 도 gym 도 필요 없음 (7장 학습 테스트는 GPU 가 있으면 빨라짐). 실차 bag (약 1.3 GB) 은 첫 실행 때 구글 드라이브에서 받음.
-5장의 클릭 화면은 코랩에서만 뜸.
+3장과 5장의 클릭 화면은 코랩에서만 뜸.
 
 | 장 | 내용 |
 |---|---|
 | 1 | bag 살펴보기: 토픽, FPS, 정지 구간 |
 | 2 | 디코딩과 왜곡 보정: Bayer, `ost.yaml`, camsim 해상도 |
-| 3 | 바닥 기준 extrinsic: pitch 추정, 높이, `H_i2g.npy` |
+| 3 | 카메라 높이와 기울기: 테이프에 점 4개 찍기 (손으로 IPM), `H_i2g.npy` |
 | 4 | 실차 BEV vs 시뮬 BEV |
 | 5 | 라벨링: 자동 라벨 → 직접 찍기(클릭) → 둘 비교 |
 | 6 | 데이터셋 저장 (camsim 포맷). 직접 찍은 프레임은 내 라벨로 |
@@ -58,10 +58,11 @@ md('''
 code('''
 import os, sys, subprocess
 IN_COLAB = "google.colab" in sys.modules
-REPO_URL = "https://github.com/jhcho-53/HYU_AEL_3week.git"     # 다른 fork 쓰려면 여기만 바꿈
+REPO_URL = "https://github.com/jhcho-53/HYU_AEL_3week.git"     # 다른 fork 나 브랜치를 쓰려면 이 두 줄만 바꿈
+REPO_BRANCH = "main"
 if IN_COLAB:
     if not os.path.isdir("/content/f1tenth_gym"):
-        subprocess.run(["git", "clone", "-q", "--branch", "main", REPO_URL, "/content/f1tenth_gym"], check=True)
+        subprocess.run(["git", "clone", "-q", "--branch", REPO_BRANCH, REPO_URL, "/content/f1tenth_gym"], check=True)
     subprocess.run(["git", "-C", "/content/f1tenth_gym", "pull", "-q", "--ff-only"], check=True)
     subprocess.run([sys.executable, "-m", "pip", "install", "-q", "rosbags==0.11.5", "gdown", "opencv-python-headless",
                     "pyyaml", "imageio-ffmpeg", "onnx"], check=True)   # onnx: 9장 model.onnx 내보내기
@@ -93,12 +94,11 @@ md('''
 값을 바꿨으면 이 셀부터 다시 실행.
 
 - `ahead_m` 은 **camsim_lab 과 같아야 함.** 라벨 기준(중심선 따라 몇 m 앞)이라 다르면 같은 모델로 비교가 안 됨.
-- 바닥 기준 높이는 영상만으론 알 수 없어서 실측 하나가 필요함. **차선 간격(테이프 중심 간)** 을 줄자로 재는 게 렌즈 높이보다 쉽고 정확함.
-  둘 다 None 이면 `config.yaml` 의 가정값(0.20 m)을 씀.
+- `LANE_WIDTH_MEASURED`: 3장에서 카메라 높이를 구할 때 씀. 영상만으로는 높이를 알 수 없어서 실제로 잰 길이가 하나 필요함.
+  두 테이프의 **가운데와 가운데 사이**를 줄자로 잰 값. 렌즈 높이(바닥 ~ 렌즈 가운데)를 자로 쟀으면 `CAM_HEIGHT_MEASURED` 에 넣음
+  (넣으면 그 값을 씀). 둘 다 None 이면 `config.yaml` 의 가정값(0.20 m)을 씀.
 - `OFFSET_X_M`: camsim 좌표 원점은 **후륜축**. 카메라가 후륜축보다 앞에 있으면 그 거리. 모르면 0 (camsim 기본값과 같음).
 - `BAG_DIR`, `OST_FILE`: bag 폴더와 그 카메라의 렌즈 캘리브레이션(`ost.yaml`, 1주차 결과). 내 bag 이면 맨 아래 "내 bag 으로 하기".
-- `PITCH_MEASURED`: 3장은 출발 전 정지 구간으로 pitch 를 잼. 정지 구간이 짧아서 추정이 이상하면 따로 잰 값을 넣음
-  (카메라 마운트를 안 건드렸으면 전에 같은 차로 잰 값). 렌즈 높이를 자로 쟀으면 `CAM_HEIGHT_MEASURED` 도 넣음.
 ''')
 code('''
 cfg = config.load()
@@ -110,7 +110,6 @@ DRIVE_FOLDER_URL = "https://drive.google.com/drive/folders/1dKVcoT88K1Ky4co-fWjh
 
 LANE_WIDTH_MEASURED = 0.80         # [m] 두 테이프 중심 사이 간격 (실측)
 CAM_HEIGHT_MEASURED = None         # [m] 바닥 ~ 렌즈 중심 (실측). 넣으면 차선 간격보다 우선
-PITCH_MEASURED = None              # [deg] 넣으면 3장 추정 대신 씀 (정지 구간이 짧은 bag 용)
 OFFSET_X_M = 0.0                   # [m] 후륜축 -> 카메라 전방 거리
 
 SKIP_STATIC = True                 # 출발 전 정지 구간 프레임은 거의 같은 이미지라 데이터셋에서 뺌
@@ -144,9 +143,10 @@ print("bag:", BAG_DIR, sorted(p.name for p in Path(BAG_DIR).iterdir()))
 # =========================================================================== 1. bag
 md('''
 ## 1. bag 살펴보기
-`/tf` 가 없어서 카메라가 바닥에서 얼마나, 어떤 각도로 달렸는지(extrinsic)는 bag 어디에도 없음. 3장에서 영상으로 추정함.
+`/tf` 가 없어서 카메라가 바닥에서 얼마나, 어떤 각도로 달렸는지(extrinsic)는 bag 어디에도 없음. 3장에서 영상으로 구함.
 
-프레임 간 밝기 차로 움직임을 재서, 출발 전 정지 구간을 찾음. 3장 pitch 추정은 차선이 곧은 이 구간으로 함.
+프레임 간 밝기 차로 움직임을 재서, 출발 전 정지 구간을 찾음. 정지 구간 프레임은 거의 같은 그림이라 데이터셋에서 뺌 (`SKIP_STATIC`).
+3장에서 점을 안 찍었을 때 쓰는 자동 추정도 이 구간을 씀.
 ''')
 code('''
 with real.open_bag(BAG_DIR) as reader:
@@ -163,9 +163,9 @@ MOTION_THRESH = 4.0 if FPS >= 10 else 10.0     # 0.5초에 한 장으로 줄인 
 STATIC_END = real.static_end(motion, MOTION_THRESH)
 t_s = (stamps - stamps[0]) / 1e9
 print(f"{N_FRAMES} frames, {FPS:.1f} FPS, static: frame 0 ~ {STATIC_END - 1}")
-if STATIC_END / FPS < 1.0 and PITCH_MEASURED is None:
-    print(f"출발 전 정지 구간이 {STATIC_END / FPS:.1f}초({STATIC_END}장)뿐임. 3초 이상 세워 두고 녹화해야 3장 pitch 추정이 확실함. "
-          "추정이 이상하면 따로 잰 값을 파라미터 셀의 PITCH_MEASURED, CAM_HEIGHT_MEASURED 에 넣을 것.")
+if STATIC_END / FPS < 1.0:
+    print(f"출발 전 정지 구간이 {STATIC_END / FPS:.1f}초({STATIC_END}장)뿐임. 3장에서 점 4개를 찍으면 상관없음 "
+          "(점을 안 찍었을 때 쓰는 자동 추정만 이 구간을 씀).")
 
 fig, ax = plt.subplots(figsize=(10, 3))
 ax.plot(t_s, motion, lw=0.8); ax.axhline(MOTION_THRESH, color="r", ls="--", lw=0.8)
@@ -213,41 +213,117 @@ plt.tight_layout(); plt.show()
 
 # =========================================================================== 3. extrinsic
 md('''
-## 3. 바닥 기준 extrinsic
-IPM 에는 카메라가 바닥에서 **얼마나 높이, 어떤 각도로** 달렸는지가 필요함. bag 에 없으니 영상으로 정함.
+## 3. 카메라 높이와 기울기 재기 (손으로 IPM)
+BEV(위에서 내려다본 그림)를 만들려면 카메라가 **바닥에서 몇 cm 높이에**, **위아래로 몇 도 기울어져** 달렸는지 알아야 함.
+bag 에는 이 값이 없음. 그래서 영상 한 장의 노란 테이프에 점 4개를 찍어서 구함.
 
-- **pitch**: 정지 구간 프레임에서 노란 테이프를 HSV 로 고르고, pitch 를 바꿔 가며 위에서 본 두 차선의 간격이
-  행마다 얼마나 일정한지(변동계수 std/mean)를 잼. 가장 일정할 때가 정답. 차선이 곧은 구간에서만 성립함.
-  정지 구간이 짧으면 이 추정이 틀릴 수 있어서, 따로 잰 pitch 가 있으면 0장의 `PITCH_MEASURED` 에 넣음
-  (높이는 그대로 정지 구간 프레임과 실측 차선 간격으로 잼).
-- **높이**: 지면이 통째로 높이에 비례해 커지거나 작아질 뿐 영상은 똑같아서, 영상만으론 못 정함. 위에서 차선 간격이
-  "높이의 몇 배"로 나오므로 실측 간격 하나로 높이가 정해짐.
-- roll, yaw 는 0 으로 가정. 정확히 하려면 바닥에 체커보드를 놓고 `cv2.solvePnP` 로 네 값을 한 번에 구하면 됨.
+**원리** (기찻길 사진을 떠올리면 됨)
+- 곧은 길의 두 테이프는 실제로는 평행함. 그런데 사진에서는 멀어질수록 가까워지다가 한 점에서 만남. 이 점이 **소실점**.
+- 소실점이 사진의 **어느 높이**에 있는지가 카메라 기울기(pitch)를 알려 줌. 카메라를 아래로 숙일수록 소실점이 위로 올라감.
+- 기울기를 알면, 두 테이프 사이가 사진에서 얼마나 넓게 보이는지로 카메라 높이를 알 수 있음.
+  카메라가 낮을수록 같은 간격이 더 넓게 보임. 그래서 실제 테이프 간격(0장 `LANE_WIDTH_MEASURED`)을 줄자로 재 둬야 함.
+- 좌우로 기울어짐(roll)은 0 으로 봄. 카메라를 똑바로 달았으면 문제없음.
 
-결과를 `H_i2g.npy` (camsim 해상도 이미지 px -> 후륜축 기준 지면 m) 로 저장하고 `cfg.camera.h_i2g_file` 에 넣음.
+순서: **3-1** 곧은 장면 한 장 고르기 → **3-2** 점 4개 찍기 → **3-3** 결과 확인.
+결과는 `H_i2g.npy` (camsim 해상도 영상 px → 후륜축 기준 바닥 m) 로 저장해서 4장부터 씀.
+''')
+
+md('''
+### 3-1 곧은 장면 한 장 고르기
+아래에 bag 에서 고르게 뽑은 장면들이 프레임 번호와 함께 나옴.
+**두 테이프가 다 보이고 곧게 뻗은 장면**의 번호를 셀 맨 위 `IPM_FRAME` 에 넣고 이 셀을 다시 실행.
+
+- 빨간 제목이 지금 고른 장면
+- 차가 서 있거나 천천히 갈 때가 좋음 (빨리 달리면 차체가 앞뒤로 흔들려서 기울기가 조금씩 바뀜)
+- 녹화 맨 앞일 필요는 없음. 중간에 곧은 곳을 지나간 장면이면 됨
+''')
+code('''
+IPM_FRAME = 0          # 두 테이프가 다 보이는 곧은 장면의 프레임 번호. 아래 그림에서 골라서 바꿈
+
+if not 0 <= IPM_FRAME < N_FRAMES:
+    raise ValueError(f"IPM_FRAME 은 0 ~ {N_FRAMES - 1} 사이여야 함.")
+pick = sorted({int(i) for i in np.linspace(0, N_FRAMES - 1, 8)} | {IPM_FRAME})
+thumbs = real.load_images(BAG_DIR, pick)
+fig, axes = plt.subplots(2, (len(pick) + 1) // 2, figsize=(16, 5), squeeze=False)
+for ax in axes.flat:
+    ax.axis("off")
+for ax, i in zip(axes.flat, pick):
+    ax.imshow(cv2.cvtColor(real.to_camsim(undistort(real.decode_image(thumbs[i])), cfg), cv2.COLOR_BGR2RGB))
+    ax.set_title(f"frame {i}" + ("  (IPM_FRAME)" if i == IPM_FRAME else ""), color="r" if i == IPM_FRAME else "k")
+plt.tight_layout(); plt.show()
+IPM_IMG = undistort(real.decode_image(thumbs[IPM_FRAME]))     # 왜곡을 편 원본 해상도 영상. 3-2 에서 여기에 점을 찍음
+''')
+
+md('''
+### 3-2 테이프에 점 4개 찍기
+1. 한쪽 테이프의 **가운데**를 클릭 (가까운 곳). 같은 테이프의 가운데를 한 번 더 클릭 (먼 곳)
+2. 다른 쪽 테이프도 똑같이 2개
+3. 그러면 테이프를 따라 선 두 개가 그려지고, 두 선이 만나는 곳(노란 점 = 소실점)과 지평선(점선)이 나옴.
+   **두 선이 테이프 위에 잘 겹치면 저장 (Enter)**. 안 겹치면 점을 끌어서 옮김
+4. 저장하면 화면 위에 카메라 기울기와 높이가 나옴. 그다음 **3-3 셀부터 끝까지 다시 실행**
+   (4장부터 끝까지 이 값으로 BEV 와 라벨을 만듦. 3-3 만 다시 돌리면 5장 라벨과 카메라 값이 어긋남)
+
+- 한 테이프의 두 점은 서로 멀리 찍을수록 정확함 (가까운 점은 화면 아래쪽, 먼 점은 테이프가 흐려지기 전)
+- 키보드가 안 먹으면 그림을 한 번 클릭. Backspace 는 마지막 점 지우기
+- 점은 `out/real/<bag 폴더 이름>_ipm.json` 에 저장되고 (드라이브에 둔 내 bag 이면 그 폴더에), 셀을 다시 실행해도 남음.
+  `IPM_FRAME` 을 바꾸면 새로 찍음
+- **모두 실행**으로 돌렸으면 다른 셀이 다 끝난 뒤에 화면이 뜸. 그때 찍고 저장한 다음 3-3 셀부터 끝까지 다시 실행
+''')
+code('''
+IPM_DIR = Path(BAG_DIR) if str(BAG_DIR).startswith("/content/drive") else Path("out/real")   # 드라이브 bag 이면 옆에 저장
+IPM_FILE = IPM_DIR / f"{Path(BAG_DIR).name}_ipm.json"
+IPM_LANE_W = LANE_WIDTH_MEASURED if CAM_HEIGHT_MEASURED is None else None   # 화면의 높이도 3-3 과 같은 방법으로
+ipm = week3_lab.LaneClicker(IPM_IMG, K_FULL, IPM_LANE_W, IPM_FILE,
+                            IPM_FRAME, stamps[IPM_FRAME])
+ipm.show()
+''')
+
+md('''
+### 3-3 결과 확인
+3-2 에서 저장한 점으로 기울기와 높이를 계산해서 `H_i2g.npy` 로 저장함.
+
+아직 점을 안 찍었으면 (코랩이 아니거나, **모두 실행**으로 돌려서 찍기 전에 이 셀이 돌았으면) **자동 추정**을 씀:
+출발 전 정지 구간 영상에서 노란 테이프를 찾아, 위에서 봤을 때 두 테이프가 가장 평행해지는 기울기를 고름.
+점을 찍었으면 자동 추정도 옆에 숫자로 보여 줌. 둘이 1도 넘게 다르면 둘 중 하나가 틀린 것.
+
+**확인할 것**: 아래 그림 오른쪽(BEV)에서 두 테이프가 **나란한 두 줄**이면 맞은 것
+(차가 차선과 조금 틀어져 서 있었으면 비스듬해도 됨).
+위로 갈수록 벌어지거나 모이면 기울기가 틀린 것이니 3-2 에서 점을 다시 찍고 이 셀을 다시 실행.
 ''')
 code('''
 V_MARGIN = 15                                        # 지평선에서 이만큼 아래부터 바닥으로 봄 (원본 px)
-static_idx = list(range(0, max(STATIC_END, 1), 10 if STATIC_END > 30 else 1))   # 줄인 bag 은 정지 구간이 몇 장뿐이라 전부
-static_frames = {i: undistort(real.decode_image(m)) for i, m in real.load_images(BAG_DIR, static_idx).items()}
-PITCH = 0.0 if PITCH_MEASURED is None else float(PITCH_MEASURED)   # 1차: 지평선을 영상 중앙(pitch 0)으로 보고 추정
-for _ in range(2 if PITCH_MEASURED is None else 1):  # 2차: 1차 pitch 의 지평선 아래만 써서 다시
-    masks = [real.lane_mask(static_frames[i], real.horizon_row(K_FULL, PITCH) + V_MARGIN) for i in static_idx]
-    best, cand, costs, gaps = real.estimate_pitch(masks, K_FULL)
-    PITCH = best if PITCH_MEASURED is None else float(cand[np.argmin(np.abs(cand - PITCH_MEASURED))])
-PITCH_SOURCE = "estimated from static frames" if PITCH_MEASURED is None else "PITCH_MEASURED"
-GAP_H = float(np.nanmean(gaps[:, list(cand).index(PITCH)]))      # 차선 간격 / 카메라 높이 (정지 구간 프레임)
-if not np.isfinite(GAP_H):                           # 정해 준 pitch 로는 정지 프레임에서 두 차선이 안 잡힘
-    if CAM_HEIGHT_MEASURED is None:
-        raise ValueError(f"pitch {PITCH:+.2f} 도로는 정지 구간 프레임에서 두 차선이 안 잡힘. pitch 값을 확인하거나 CAM_HEIGHT_MEASURED 도 넣을 것.")
-    GAP_H = LANE_WIDTH_MEASURED / CAM_HEIGHT_MEASURED
+
+def auto_pitch():
+    """자동 추정: 정지 구간 영상에서 위에서 본 두 테이프가 가장 평행해지는 pitch. (pitch, 테이프 간격 / 높이)"""
+    idx = list(range(0, max(STATIC_END, 1), 10 if STATIC_END > 30 else 1))   # 줄인 bag 은 정지 구간이 몇 장뿐이라 전부
+    imgs = [undistort(real.decode_image(m)) for m in real.load_images(BAG_DIR, idx).values()]
+    pitch = 0.0                                      # 1차: 지평선을 영상 가운데(pitch 0)로 보고, 2차: 1차 지평선 아래만 써서 다시
+    for _ in range(2):
+        masks = [real.lane_mask(img, real.horizon_row(K_FULL, pitch) + V_MARGIN) for img in imgs]
+        pitch, cand, costs, gaps = real.estimate_pitch(masks, K_FULL)
+    return pitch, float(np.nanmean(gaps[:, list(cand).index(pitch)]))
+
+try:
+    AUTO = auto_pitch()
+except ValueError:                                   # 정지 구간에 두 테이프가 다 안 보이면 자동 추정은 못 함
+    AUTO = None
+if ipm.key["frame"] != IPM_FRAME:
+    raise ValueError("3-1 에서 IPM_FRAME 을 바꿨으면 3-2 셀을 다시 실행하고 점을 새로 찍을 것.")
+pose = ipm.pose()
+if pose is not None:
+    PITCH, GAP_H, PITCH_SOURCE = pose["pitch_deg"], pose["gap_h"], f"3-2 에서 찍은 점 (frame {IPM_FRAME})"
+elif AUTO is not None:
+    (PITCH, GAP_H), PITCH_SOURCE = AUTO, "자동 추정. 3-2 에서 점을 찍고 저장하면 그 값을 씀"
+else:
+    raise ValueError("자동 추정도 안 됨 (출발 전 정지 구간에 두 테이프가 다 안 보임). "
+                     "3-2 에서 점 4개를 찍고 저장한 뒤 이 셀을 다시 실행할 것.")
 
 if CAM_HEIGHT_MEASURED is not None:
-    HEIGHT, HEIGHT_SOURCE = CAM_HEIGHT_MEASURED, "measured height"
+    HEIGHT, HEIGHT_SOURCE = CAM_HEIGHT_MEASURED, "자로 잰 높이 (CAM_HEIGHT_MEASURED)"
 elif LANE_WIDTH_MEASURED is not None:
-    HEIGHT, HEIGHT_SOURCE = LANE_WIDTH_MEASURED / GAP_H, "from measured lane width"
+    HEIGHT, HEIGHT_SOURCE = LANE_WIDTH_MEASURED / GAP_H, f"테이프 간격 {LANE_WIDTH_MEASURED:.2f} m 로 계산"
 else:
-    HEIGHT, HEIGHT_SOURCE = cfg.camera.height_m, "ASSUMED (config.yaml)"
+    HEIGHT, HEIGHT_SOURCE = cfg.camera.height_m, "가정값 (config.yaml). 테이프 간격이나 렌즈 높이를 재서 0장에 넣을 것"
 LANE_W = GAP_H * HEIGHT
 
 cfg.camera.pitch_deg, cfg.camera.height_m, cfg.camera.offset_x_m = PITCH, HEIGHT, OFFSET_X_M
@@ -257,26 +333,34 @@ np.save(H_FILE, H_I2G)
 cfg.camera.h_i2g_file = H_FILE
 V_MIN = real.horizon_row(K_FULL, PITCH) + V_MARGIN
 
-print(f"pitch = {PITCH:+.2f} deg ({PITCH_SOURCE}; negative = tilted up), horizon row {real.horizon_row(K_FULL, PITCH):.0f} px (full res)")
-print(f"lane gap = {GAP_H:.2f} x height -> height {HEIGHT:.3f} m ({HEIGHT_SOURCE}), lane width {LANE_W:.2f} m")
+tilt = "아래로 숙임" if PITCH > 0 else "위로 들림" if PITCH < 0 else "수평"
+print(f"카메라 기울기 pitch {PITCH:+.2f}도 ({tilt}) <- {PITCH_SOURCE}")
+print(f"카메라 높이 {HEIGHT * 100:.1f} cm <- {HEIGHT_SOURCE}")
+if pose is not None and AUTO is not None:
+    diff = PITCH - AUTO[0]
+    print(f"자동 추정은 pitch {AUTO[0]:+.2f}도, 차이 {diff:+.2f}도: "
+          + ("1도 넘게 다름. 아래 BEV 를 보고 점을 다시 찍을지 정할 것" if abs(diff) > 1 else "1도 안쪽이라 괜찮음"))
 print("saved", H_FILE)
 
-fig, ax = plt.subplots(1, 2, figsize=(14, 3.5))
-for row in costs:
-    ax[0].plot(cand, row, color="gray", alpha=0.3, lw=0.8)
-seen = ~np.isnan(costs).all(axis=0)                  # 두 차선이 하나도 안 잡힌 pitch 후보는 빼고
-ax[0].plot(cand[seen], np.nanmean(costs[:, seen], axis=0), "b", lw=2, label="mean")
-ax[0].axvline(PITCH, color="r", ls="--", label=f"{'best' if PITCH_MEASURED is None else 'given'} {PITCH:+.2f} deg")
-ax[0].set(xlabel="pitch [deg]", ylabel="std/mean of lane gap", ylim=(0, 0.4),
-          title=f"Lane parallelism over {len(static_idx)} static frames")
-ax[0].legend()
-ax[1].imshow(masks[0], cmap="gray"); ax[1].set_title("Yellow tape mask (above horizon ignored)"); ax[1].axis("off")
-plt.tight_layout(); plt.show()
+view = real.to_camsim(IPM_IMG, cfg)                  # 왼쪽: 고른 장면 + 지평선(흰 선), 찍은 점과 테이프 선
+s = view.shape[1] / IPM_IMG.shape[1]
+v_h = int(round(real.horizon_row(K_FULL, PITCH) * s))
+cv2.line(view, (0, v_h), (view.shape[1], v_h), (255, 255, 255), 1, cv2.LINE_AA)
+if pose is not None:
+    vp = np.array(pose["vanishing_point"]) * s
+    for k, col in ((0, (0, 0, 255)), (1, (255, 160, 0))):
+        a, b = (np.array(q) * s for q in ipm.points[2 * k:2 * k + 2])
+        cv2.line(view, tuple(np.round(a if a[1] > b[1] else b).astype(int)), tuple(np.round(vp).astype(int)), col, 2, cv2.LINE_AA)
+        for q in (a, b):
+            cv2.circle(view, tuple(np.round(q).astype(int)), 5, col, -1)
+bev = real.bev_from_camera(IPM_IMG, H_I2G, cfg)     # 오른쪽: 같은 장면의 BEV
+show(viz.side_by_side(view, cv2.resize(bev, None, fx=view.shape[0] / bev.shape[0], fy=view.shape[0] / bev.shape[0])),
+     width=1000, title=f"frame {IPM_FRAME}: 찍은 점과 지평선 | BEV (두 테이프가 나란하면 맞음)")
 ''')
 
 md('''
-### 검증: 지면 거리 격자를 영상에 투영
-왼쪽은 `config.yaml` 가정 카메라(화각 90 도, 높이 0.20 m, pitch 0), 오른쪽은 실측 K + 추정 extrinsic.
+### 한 번 더 확인: 바닥 거리 눈금을 영상에 그리기
+왼쪽은 `config.yaml` 가정 카메라(화각 90 도, 높이 0.20 m, pitch 0), 오른쪽은 실측 K + 3-3 의 기울기와 높이.
 초록 선이 후륜축에서 0.5, 1, 1.5, 2, 3 m, 하늘색이 좌우 0.4 m 간격. **오른쪽 격자가 테이프와 나란해야** 맞는 것.
 ''')
 code('''
@@ -296,13 +380,13 @@ demo_cam = real.to_camsim(undistort(real.decode_image(msgs[DEMO_IDX[0]])), cfg)
 H_assumed = camera.build(config.load())[0]          # config.yaml 기본 카메라
 H_cam = camera.build(cfg)[0]                        # h_i2g_file 이 들어간 cfg -> 실차 카메라
 show(viz.side_by_side(draw_grid(demo_cam, H_assumed), draw_grid(demo_cam, H_cam)), width=1000,
-     title="config.yaml assumption (hfov 90, h 0.20, pitch 0) | ost.yaml K + estimated extrinsic")
+     title="config.yaml assumption (hfov 90, h 0.20, pitch 0) | ost.yaml K + 3-3 pitch, height")
 ''')
 
 md('''
 ### 직접 바꿔 보기 (선택)
 슬라이더로 pitch 와 높이를 바꾸면 모델 입력 BEV 가 어떻게 변하는지 봄. 높이는 BEV 를 키우거나 줄이기만 하고,
-pitch 는 두 차선이 벌어지거나 모이게 만듦. 바꾼 값은 저장되지 않음 (위 셀의 추정값이 계속 쓰임).
+pitch 는 두 차선이 벌어지거나 모이게 만듦. 바꾼 값은 저장되지 않음 (3-3 의 값이 계속 쓰임).
 ''')
 code('''
 try:
@@ -389,6 +473,11 @@ for i in DEMO_IDX:
          title=f"frame {i}: {lab['status']}, wp = {np.round(lab['wp'], 3)} m")
 ''')
 code('''
+H_LABELED = H_I2G.copy()                       # 5장 라벨을 만든 카메라 값. 5-2 와 6장이 같은지 확인함
+def check_camera():
+    if not np.array_equal(H_LABELED, H_I2G):
+        raise ValueError("5-1 라벨을 만든 뒤에 3장 카메라 값이 바뀌었음. 3-3 셀부터 끝까지 다시 실행할 것.")
+
 records, WPS = [], []
 t0 = time.time()
 for i, t, msg in real.iter_images(BAG_DIR):
@@ -429,8 +518,11 @@ md('''
 승인한 점은 6장 데이터셋에서 자동 라벨 대신 쓰이고, 제외한 프레임은 데이터셋에서 빠짐. 다 안 찍어도 다음 장으로 넘어갈 수 있음.
 
 **모두 실행**으로 돌렸으면 다른 셀이 도는 동안은 클릭이 안 먹음. 끝까지 다 돈 뒤에 찍고, **6장부터 다시 실행**할 것.
+3-2 에서 점을 새로 저장했으면 **먼저 3-3 셀부터 끝까지 다시 실행**한 뒤에 여기서 찍을 것
+(3장 값이 바뀌면 BEV 가 바뀌어서 전에 찍은 라벨이 안 맞음).
 ''')
 code('''
+check_camera()
 start = STATIC_END if SKIP_STATIC else 0                 # 정지 구간은 거의 같은 그림이라 건너뜀
 step = max(1, int(round(FPS * CLICK_EVERY_S)))           # 37 Hz bag 이면 19장에 한 장
 CLICK_IDX = list(range(start, N_FRAMES, step))
@@ -495,6 +587,7 @@ out/real_dataset/
   평가는 `split="all"` 로, 학습에 섞을 거면 시간 구간(또는 bag) 단위로 나눌 것.
 ''')
 code('''
+check_camera()
 WPS_DS = WPS.copy()                                 # 데이터셋에 쓸 라벨: 자동 라벨에 5-2 클릭을 덮어씀
 frames["label"] = "auto"
 for i, l in zip(CLICK_IDX, labeler.labels):
@@ -783,14 +876,14 @@ md('''
 ''')
 md('''
 ## 내 bag 으로 하기
-1. 차에서 레포의 `rosbag/README.md` 순서대로 녹화함. 출발 전 3초 이상 세워 둘 것 (3장 pitch 추정에 씀).
+1. 차에서 레포의 `rosbag/README.md` 순서대로 녹화함. 곧은 구간에서 두 테이프가 다 보이는 장면이 한 번은 있어야 함
+   (3장에서 그 장면에 점을 찍음). 테이프 간격(가운데 ~ 가운데)도 줄자로 재 둠.
    파일이 크면 0.5초에 한 장으로 줄여도 됨 (`rosbag/README.md` 5번). 줄인 bag 도 이 노트북이 그대로 읽음
 2. bag 폴더(`metadata.yaml` + `.db3`)에 그 카메라의 `ost.yaml` 을 같이 넣어서 노트북 컴퓨터로 가져오고(scp 나 USB),
    **구글 드라이브**의 `내 드라이브/week3/` 에 올림. 런타임이 끊겨도 남고, 다음에 또 쓸 수 있음
-3. 0장 파라미터 셀의 `BAG_DIR` 을 아래처럼 바꿔서 그 셀부터 다시 실행. 드라이브 경로면 다음 셀이 드라이브를 연결함
-   (처음 한 번 구글 계정 허용 창이 뜸). 차선 간격이 다르면 `LANE_WIDTH_MEASURED` 도 바꿈.
-   1장이 "출발 전 정지 구간이 ...초뿐임" 이라고 하면 3장 결과를 의심할 것. 따로 잰 값이 있으면 `PITCH_MEASURED`,
-   `CAM_HEIGHT_MEASURED` 에 넣음 (카메라 마운트를 안 건드렸으면 전에 같은 차로 잰 값)
+3. 0장 파라미터 셀의 `BAG_DIR` 을 아래처럼 바꾸고, 잰 테이프 간격을 `LANE_WIDTH_MEASURED` 에 넣어서 그 셀부터 다시 실행.
+   드라이브 경로면 다음 셀이 드라이브를 연결함 (처음 한 번 구글 계정 허용 창이 뜸)
+4. 3장에서 내 bag 의 곧은 장면을 골라 점 4개를 새로 찍음 (bag 이 바뀌면 점도 새로 찍어야 함)
 
 ```python
 BAG_DIR = "/content/drive/MyDrive/week3/my_run_2hz"     # metadata.yaml, .db3, ost.yaml 이 있는 폴더

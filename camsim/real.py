@@ -6,7 +6,8 @@
   라벨   : labels.csv 의 wp_x, wp_y. 기준은 gt.waypoint_ahead 와 같은 "중심선 따라 ahead_m 호길이"
 
 bag 에는 extrinsic 이 없음 (camera_info 는 0 으로 비어 있고 /tf 도 녹화 안 됨). 그래서
-  pitch  : 정지 구간에서 위에서 본 두 차선이 평행해지는 값을 찾음
+  pitch  : 곧은 두 테이프가 영상에서 만나는 소실점의 높이 (pose_from_lane_points, 3장에서 점 4개를 찍음).
+           점을 안 찍으면 정지 구간에서 위에서 본 두 차선이 평행해지는 값을 찾음 (estimate_pitch)
   height : 단안 영상만으론 스케일을 모름. 실측 차선 간격(테이프 중심 간)이나 실측 높이로 정함
   roll, yaw 는 0 으로 가정.
 
@@ -244,6 +245,41 @@ def estimate_pitch(masks, K, candidates=np.arange(-12.0, 2.01, 0.25)):
     mean_cost = np.where(valid, np.nanmean(np.where(valid, costs, 0.0), axis=0), np.nan)
     best = int(np.nanargmin(mean_cost))
     return float(candidates[best]), np.asarray(candidates), costs, gaps
+
+
+def pose_from_lane_points(points, K, lane_width_m=None) -> dict:
+    """손으로 하는 IPM: 곧은 두 테이프의 중심에 찍은 점 4개 -> pitch, 높이 (real_ipm_lab 3장).
+
+    points 는 왜곡 보정한 원본 해상도 px. 앞 2개가 한 테이프, 뒤 2개가 다른 테이프 (좌우, 원근 순서는 상관없음).
+    두 테이프는 바닥에서 평행이라 영상에서는 소실점 하나에서 만남. roll 이 0 이면 소실점의 행이 지평선이라
+    horizon_row 를 거꾸로 풀면 pitch. 그 pitch 로 높이 1 의 바닥에 펴면 두 선 사이 간격이 높이의 몇 배인지 나옴.
+    lane_width_m 이 None 이면 height_m 도 None (높이는 다른 실측값으로 정할 때).
+    """
+    p = np.asarray(points, dtype=np.float64).reshape(4, 2)
+    if min(np.hypot(*(p[0] - p[1])), np.hypot(*(p[2] - p[3]))) < 20:
+        raise ValueError("같은 테이프에 찍은 두 점이 너무 가까움. 가까운 곳 하나, 먼 곳 하나를 찍을 것.")
+    h = np.column_stack([p, np.ones(4)])
+    first = np.cross(h[0], h[1])
+    if np.all(np.abs(h[2:] @ first) / np.hypot(*first[:2]) < 20):
+        raise ValueError("점 4개가 한 테이프 위에 있음. 1·2번은 한 테이프, 3·4번은 다른 테이프에 나눠 찍을 것.")
+    vp = np.cross(first, np.cross(h[2], h[3]))
+    if abs(vp[2]) < 1e-9 * np.linalg.norm(vp):
+        raise ValueError("두 선이 영상에서 평행이라 만나지 않음. 두 테이프를 따라 점을 다시 찍을 것.")
+    vp = vp[:2] / vp[2]
+    if vp[1] >= p[:, 1].min():
+        raise ValueError("두 선이 찍은 점보다 먼 쪽에서 만나야 함. 한 테이프에 2개, 다른 테이프에 2개 찍었는지 확인할 것.")
+    pitch = float(np.degrees(np.arctan((K[1, 2] - vp[1]) / K[1, 1])))
+    if abs(pitch) > 20:
+        raise ValueError(f"기울기가 {pitch:+.1f}도로 나옴. 너무 커서 점이 잘못 찍힌 것. 두 테이프를 따라 다시 찍을 것.")
+    g = camera.project(np.linalg.inv(ground_homography(K, pitch, 1.0)), p)      # 높이 1 의 바닥 좌표
+    t = (g[1] - g[0]) / np.linalg.norm(g[1] - g[0])
+    t = t if t[0] > 0 else -t                                                   # 앞쪽을 향하게
+    heading = float(np.degrees(np.arctan2(t[1], t[0])))
+    if abs(heading) > 45:
+        raise ValueError("점이 테이프를 가로질러 찍힘. 한 테이프를 따라 가까운 곳과 먼 곳에 찍을 것.")
+    gap_h = float(np.mean(np.abs((g[2:] - g[0]) @ np.array([-t[1], t[0]]))))
+    return dict(pitch_deg=pitch, height_m=None if lane_width_m is None else lane_width_m / gap_h, gap_h=gap_h,
+                lane_heading_deg=heading, vanishing_point=vp.tolist())
 
 
 # ---- waypoint 라벨 --------------------------------------------------------------------------
