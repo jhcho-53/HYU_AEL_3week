@@ -1,5 +1,6 @@
-"""실차 IPM 노트북(notebooks/real_ipm_lab.ipynb) 5-2 장의 클릭 라벨링 도우미.
+"""실차 IPM 노트북(notebooks/real_ipm_lab.ipynb) 3-2 장의 손 IPM, 5-2 장의 클릭 라벨링 도우미.
 
+`LaneClicker` 가 Colab 에서 영상 한 장의 두 테이프에 점 4개를 찍는 화면을 띄우고, 저장하면 pitch, 높이를 냄.
 `Labeler` 가 Colab 에서 BEV 에 1 m 앞 점을 찍는 화면을 띄우고, 누를 때마다 라벨을 JSON 으로 저장함.
 노트북은 드라이브에서 bag 을 못 받으면 `SAMPLE` 의 예제 bag 으로 넘어감.
 
@@ -23,6 +24,7 @@ from .real import IMAGE_TOPIC, LABEL_HEADER
 MIN_ACCEPTED = 5          # write_dataset 의 최소 승인 수: 20 % 를 검증용으로 떼도 한 장은 남게
 SAMPLE = Path(__file__).resolve().parents[1]/'examples'/'week3_bag'
 LABELER_JS = Path(__file__).with_name('week3_labeler.js')
+IPM_JS = Path(__file__).with_name('week3_ipm.js')
 # examples/week3_bag 의 카메라: real_ipm_lab 3장이 원본 bag(run_train2_part1) 에서 추정한 값 (docs/real_ipm_manual.md 2절)
 SAMPLE_PITCH_DEG, SAMPLE_HEIGHT_M, SAMPLE_LANE_WIDTH_M = -4.25, 0.178, 0.8
 # cv_bridge 와 같은 변환 (OpenCV 는 Bayer 패턴 이름을 한 행 아래 기준으로 붙임)
@@ -182,6 +184,78 @@ def png_url(image):
     if not ok:
         raise ValueError('PNG 인코딩 실패')
     return 'data:image/png;base64,' + base64.b64encode(data.tobytes()).decode()
+
+
+def jpeg_url(image, quality=90):
+    ok, data = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    if not ok:
+        raise ValueError('JPEG 인코딩 실패')
+    return 'data:image/jpeg;base64,' + base64.b64encode(data.tobytes()).decode()
+
+
+class LaneClicker:
+    """3-2 손 IPM: 왜곡 보정한 원본 해상도 영상 한 장에서 두 테이프 중심에 점 2개씩. 계산은 real.pose_from_lane_points.
+
+    저장한 점은 bag 프레임 번호, stamp 와 함께 JSON 으로: 셀을 다시 실행해도 남고, 다른 프레임을 고르면 새로 찍음.
+    화면은 영상을 width px 로 줄여서 보여 주고, 점은 원본 해상도 px 로 주고받음.
+    lane_width_m 이 None 이면 화면에 높이를 안 보여 줌 (높이를 자로 잰 값으로 정할 때. 3-3 이 정함).
+    """
+
+    def __init__(self, image_undist, K, lane_width_m, path, frame, stamp_ns, width=960):
+        self.image, self.K, self.path = image_undist, np.asarray(K, float), Path(path)
+        self.lane_width_m = None if lane_width_m is None else float(lane_width_m)
+        self.key = dict(frame=int(frame), stamp_ns=int(stamp_ns))
+        self.scale = width / image_undist.shape[1]
+        self.points = None
+        if self.path.exists():
+            saved = json.loads(self.path.read_text())
+            if isinstance(saved, dict) and {k: saved.get(k) for k in self.key} == self.key:
+                self.points = saved['points']
+
+    def pose(self):
+        """저장한 점 4개의 pitch, 높이 (real.pose_from_lane_points). 아직 저장 안 했으면 None."""
+        return None if self.points is None else real.pose_from_lane_points(self.points, self.K, self.lane_width_m)
+
+    def page(self):
+        small = cv2.resize(self.image, None, fx=self.scale, fy=self.scale, interpolation=cv2.INTER_AREA)
+        return dict(image=jpeg_url(small), points=self.points)
+
+    def save(self, points):
+        pose = real.pose_from_lane_points(points, self.K, self.lane_width_m)    # 점이 이상하면 ValueError: 화면이 보여 줌
+        self.points = np.asarray(points, float).reshape(4, 2).round(1).tolist()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        height = None if pose['height_m'] is None else round(pose['height_m'], 4)
+        self.path.write_text(json.dumps(dict(**self.key, points=self.points, pitch_deg=round(pose['pitch_deg'], 3),
+                                             height_m=height), indent=1))
+        return dict(pitch_deg=pose['pitch_deg'], height_m=pose['height_m'], lane_heading_deg=pose['lane_heading_deg'])
+
+    def html(self, prefix='camsim.week3ipm.'):
+        h, w = self.image.shape[:2]
+        config = dict(width=round(w * self.scale), height=round(h * self.scale), scale=self.scale, prefix=prefix)
+        return f"""<div id="w3ipm"><style>
+#w3ipm{{font:15px system-ui,sans-serif}} #w3ipm .bar{{display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap}}
+#w3ipm button{{font:inherit;padding:6px 12px;border:1px solid #8a97ad;border-radius:5px;background:#eef2f8;cursor:pointer}}
+#w3ipm .save{{background:#d4f0e2}} #w3ipm canvas{{border:1px solid #8a97ad;cursor:crosshair;touch-action:none;max-width:100%}}
+#w3ipm #ipm-msg{{color:#9a5a00;min-height:22px;font-weight:600}}</style>
+<div id="ipm-msg"></div><canvas id="ipm"></canvas>
+<div class="bar"><button id="ipm-save" class="save">저장 (Enter)</button><button id="ipm-undo">한 점 지우기 (Backspace)</button>
+<button id="ipm-reset">처음부터 다시</button><span>상태: <b id="ipm-state"></b></span></div></div>
+<script>const CONFIG={json.dumps(config)};
+async function call(name,args){{const r=await google.colab.kernel.invokeFunction(CONFIG.prefix+name,args,{{}});
+const d=r.data['application/json'];if(d.error)throw Error(d.error);return d}}</script>
+<script>{IPM_JS.read_text()}</script>"""
+
+    def show(self, prefix='camsim.week3ipm.'):
+        """Colab 전용: 화면이 부르는 콜백 둘을 등록하고 이 셀 출력에 점 찍는 화면을 그림."""
+        from IPython.display import HTML, display
+        try:
+            from google.colab import output
+        except ImportError:
+            print('점 찍는 화면은 Colab에서만 뜸 (google.colab 없음). 3-3은 전에 저장한 점이 있으면 그 점을, 없으면 자동 추정값을 씀.')
+            return
+        output.register_callback(prefix + 'page', _answer(self.page))
+        output.register_callback(prefix + 'save', _answer(self.save))
+        display(HTML(self.html(prefix)))
 
 
 class Labeler:

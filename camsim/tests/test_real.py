@@ -101,6 +101,56 @@ def test_estimate_pitch_recovers_synthetic_pitch_and_lane_gap(ctx):
     assert abs(gap_h * HEIGHT - WIDTH) < 0.05 * WIDTH
 
 
+K_REAL = np.array([[1044.3, 0, 967.3], [0, 1040.7, 592.0], [0, 0, 1]])
+
+
+def _tape_points(pitch, height, heading_deg=0.0, xs=(1.0, 3.0)):
+    """곧은 두 테이프 중심선 위 점 4개 (원본 해상도 px). 차선이 차 정면에서 heading_deg 만큼 왼쪽으로 틀어짐."""
+    a = np.deg2rad(heading_deg)
+    d, n = np.array([np.cos(a), np.sin(a)]), np.array([-np.sin(a), np.cos(a)])
+    ground = np.array([x * d + side * WIDTH / 2 * n for side in (1, -1) for x in xs])
+    return camera.project(real.ground_homography(K_REAL, pitch, height), ground)
+
+
+@pytest.mark.parametrize("pitch, height, heading", [(-4.25, 0.18, 0.0), (0.75, 0.11, 0.0), (2.0, 0.13, 6.0)])
+def test_four_tape_points_give_back_pitch_and_height(pitch, height, heading):
+    pose = real.pose_from_lane_points(_tape_points(pitch, height, heading), K_REAL, WIDTH)
+    assert abs(pose["pitch_deg"] - pitch) < 1e-6
+    assert abs(pose["height_m"] - height) < 1e-6
+    assert abs(pose["lane_heading_deg"] - heading) < 1e-6
+    assert abs(pose["vanishing_point"][1] - real.horizon_row(K_REAL, pitch)) < 1e-6
+
+
+def test_tape_and_point_order_do_not_matter():
+    p = _tape_points(-1.0, 0.12)
+    ref = real.pose_from_lane_points(p, K_REAL, WIDTH)
+    for order in ([1, 0, 2, 3], [2, 3, 0, 1], [3, 2, 1, 0]):
+        pose = real.pose_from_lane_points(p[order], K_REAL, WIDTH)
+        assert abs(pose["pitch_deg"] - ref["pitch_deg"]) < 1e-9 and abs(pose["height_m"] - ref["height_m"]) < 1e-9
+
+
+def test_bad_tape_points_are_value_errors():
+    p = _tape_points(-1.0, 0.12)
+    close = p.copy()
+    close[1] = close[0] + [3, -3]
+    with pytest.raises(ValueError, match="너무 가까움"):
+        real.pose_from_lane_points(close, K_REAL, WIDTH)
+    with pytest.raises(ValueError, match="만나지 않음"):
+        real.pose_from_lane_points([[800, 1100], [800, 700], [1100, 1100], [1100, 700]], K_REAL, WIDTH)
+    with pytest.raises(ValueError, match="먼 쪽에서 만나야"):
+        real.pose_from_lane_points(p[[0, 3, 2, 1]], K_REAL, WIDTH)      # 두 테이프의 점을 엇갈리게 이음
+    one_tape = camera.project(real.ground_homography(K_REAL, -1.0, 0.12), np.array([[x, 0.4] for x in (1.0, 1.5, 2.2, 3.0)]))
+    with pytest.raises(ValueError, match="한 테이프 위에 있음"):
+        real.pose_from_lane_points(one_tape, K_REAL, WIDTH)
+    with pytest.raises(ValueError, match="가로질러"):
+        real.pose_from_lane_points(_tape_points(-1.0, 0.12, 4.0)[[0, 2, 1, 3]], K_REAL, WIDTH)   # 가까운 좌우, 먼 좌우
+
+
+def test_without_a_lane_width_only_the_height_is_left_open():
+    pose = real.pose_from_lane_points(_tape_points(-1.0, 0.12), K_REAL)
+    assert pose["height_m"] is None and abs(pose["gap_h"] * 0.12 - WIDTH) < 1e-6 and abs(pose["pitch_deg"] + 1.0) < 1e-6
+
+
 @pytest.mark.parametrize("where, tol_m", [("straight", 0.03), ("curve", 0.06)])
 def test_label_frame_matches_gt_waypoint(ctx, where, tol_m):
     cfg, trk, H_g2i = ctx

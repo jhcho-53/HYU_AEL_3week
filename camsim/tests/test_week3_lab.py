@@ -21,6 +21,9 @@ DB3 = BAG/'run_train2_part1_2hz_0.db3'
 NOTEBOOK = ROOT/'notebooks'/'real_ipm_lab.ipynb'      # 5-2 click labeling uses this module
 PAGE = Path(__file__).with_name('week3_labeler.js')
 SCENARIOS = re.findall(r'^  async (\w+)\(\)\{$', PAGE.read_text(), re.M)
+IPM_PAGE = Path(__file__).with_name('week3_ipm.js')
+IPM_SCENARIOS = re.findall(r'^  async (\w+)\(\)\{$', IPM_PAGE.read_text(), re.M)
+K_REAL = np.array([[1044.3, 0, 967.3], [0, 1040.7, 592.0], [0, 0, 1]])
 MS = 1_000_000
 ACCEPTED, REJECTED = dict(status='accepted', waypoint_m=[1.0, 0.0]), dict(status='rejected', waypoint_m=None)
 
@@ -301,10 +304,58 @@ def test_page_html_carries_the_config_and_the_script(frames, bevs, tmp_path):
     assert lab.LABELER_JS.read_text() in html and 'id="cv"' in html
 
 
+def tape_points(pitch=-1.0, height=0.12, width=0.8):
+    """Two points on each of two straight tapes, 1 m and 3 m ahead, in full-resolution pixels."""
+    ground = np.array([[x, side * width / 2] for side in (1, -1) for x in (1.0, 3.0)])
+    return render.project(real.ground_homography(K_REAL, pitch, height), ground)
+
+
+def test_lane_clicker_keeps_the_points_of_the_same_frame(tmp_path):
+    image, path = np.zeros((1200, 1920, 3), np.uint8), tmp_path/'bag_ipm.json'
+    clicker = lab.LaneClicker(image, K_REAL, .8, path, frame=7, stamp_ns=123)
+    assert clicker.pose() is None
+    saved = clicker.save(tape_points().tolist())
+    assert abs(saved['pitch_deg'] + 1.0) < 1e-3 and abs(saved['height_m'] - .12) < 1e-3
+    again = lab.LaneClicker(image, K_REAL, .8, path, frame=7, stamp_ns=123)
+    assert abs(again.pose()['height_m'] - .12) < 1e-3
+    assert lab.LaneClicker(image, K_REAL, .8, path, frame=8, stamp_ns=456).pose() is None     # another frame: click again
+
+
+def test_lane_clicker_refuses_bad_points_without_saving(tmp_path):
+    clicker = lab.LaneClicker(np.zeros((1200, 1920, 3), np.uint8), K_REAL, .8, tmp_path/'i.json', frame=0, stamp_ns=0)
+    with pytest.raises(ValueError, match='만나지 않음'):
+        clicker.save([[800, 1100], [800, 700], [1100, 1100], [1100, 700]])
+    assert not (tmp_path/'i.json').exists() and clicker.pose() is None
+
+
+def test_lane_clicker_show_registers_the_callbacks_the_page_calls(tmp_path, monkeypatch):
+    pytest.importorskip('IPython')
+    registered, shown = {}, []
+    colab = types.ModuleType('google.colab')
+    colab.output = SimpleNamespace(register_callback=registered.__setitem__)
+    monkeypatch.setitem(sys.modules, 'google.colab', colab)
+    monkeypatch.setattr('IPython.display.display', shown.append)
+    clicker = lab.LaneClicker(np.zeros((1200, 1920, 3), np.uint8), K_REAL, None, tmp_path/'i.json', frame=0, stamp_ns=0)
+    clicker.show('t.')
+    assert sorted(registered) == ['t.page', 't.save'] and len(shown) == 1     # the page calls prefix + page/save
+    assert registered['t.page']().data['points'] is None
+    saved = registered['t.save'](tape_points().tolist()).data
+    assert saved['height_m'] is None and abs(saved['pitch_deg'] + 1.0) < 1e-3   # no lane width: 3-3 sets the height
+    assert list(registered['t.save']([[0, 0]] * 4).data) == ['error']
+
+
+def test_lane_clicker_page_is_a_half_size_jpeg(tmp_path):
+    clicker = lab.LaneClicker(np.zeros((1200, 1920, 3), np.uint8), K_REAL, .8, tmp_path/'i.json', frame=0, stamp_ns=0)
+    assert clicker.page()['image'].startswith('data:image/jpeg;base64,')
+    html = clicker.html('x.')
+    assert json.loads(re.search(r'const CONFIG=(\{.*?\});', html).group(1)) == dict(width=960, height=600, scale=.5, prefix='x.')
+    assert lab.IPM_JS.read_text() in html and 'id="ipm"' in html
+
+
 def test_notebook_clicks_with_this_module_and_falls_back_to_the_sample():
     """real_ipm_lab clicks with week3_lab.Labeler and reads the sample when Drive refuses the bag; the sample must exist."""
     source = '\n'.join(''.join(c['source']) for c in json.loads(NOTEBOOK.read_text())['cells'])
-    for line in ('https://github.com/jhcho-53/HYU_AEL_3week', 'week3_lab.Labeler(',
+    for line in ('https://github.com/jhcho-53/HYU_AEL_3week', 'week3_lab.Labeler(', 'week3_lab.LaneClicker(',
                  'week3_lab.SAMPLE / "run_train2_part1_2hz"', 'week3_lab.SAMPLE / "ost.yaml"'):
         assert line in source, line
     assert (BAG/'metadata.yaml').is_file() and (lab.SAMPLE/'ost.yaml').is_file()
@@ -314,7 +365,8 @@ def test_text_students_read_is_eumseumche():
     """The notebook is in 음슴체 (…함, …음); the messages it shows must not switch to 합니다, 하세요 or 한다."""
     cells = json.loads(NOTEBOOK.read_text())['cells']
     texts = {'notebook': '\n'.join(''.join(c['source']) for c in cells), 'week3_lab.py': Path(lab.__file__).read_text(),
-             'week3_labeler.js': lab.LABELER_JS.read_text()}
+             'week3_labeler.js': lab.LABELER_JS.read_text(), 'week3_ipm.js': lab.IPM_JS.read_text(),
+             'real.py': Path(real.__file__).read_text()}
     for name, text in texts.items():
         assert not re.findall(r"""\S*(?:니다|세요|십시오|(?![마보]다)[가-힣]다(?=[.,:;!?)\]}'"`*…]|$))""", text, re.M), name
 
@@ -327,4 +379,15 @@ def test_every_page_scenario_is_found():
 @pytest.mark.parametrize('scenario', SCENARIOS)
 def test_labeler_page(scenario):
     run = subprocess.run(['node', str(PAGE), scenario], capture_output=True, text=True, timeout=60)
+    assert run.returncode == 0, run.stdout + run.stderr
+
+
+def test_every_ipm_page_scenario_is_found():
+    assert len(IPM_SCENARIOS) == 9
+
+
+@pytest.mark.skipif(shutil.which('node') is None, reason='node is not installed')
+@pytest.mark.parametrize('scenario', IPM_SCENARIOS)
+def test_ipm_page(scenario):
+    run = subprocess.run(['node', str(IPM_PAGE), scenario], capture_output=True, text=True, timeout=60)
     assert run.returncode == 0, run.stdout + run.stderr

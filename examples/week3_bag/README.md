@@ -11,7 +11,8 @@
 
 bag 토픽: `/flir_camera/image_raw` (`sensor_msgs/Image`, `bayer_rggb8`, 1920×1200), `/flir_camera/camera_info`.
 
-카메라 자세(pitch −4.25°, 높이 0.178 m)는 `real_ipm_lab` 3장이 원본 bag 에서 추정한 값이고, 테스트가 쓰는
-`camsim/week3_lab.py` 의 `SAMPLE_*` 와 같음. 이 예제 bag 으로 3장을 돌려도 pitch −4.25°, 높이 0.179 m 가 나옴.
+카메라 자세(pitch −4.25°, 높이 0.178 m)는 `real_ipm_lab` 3장의 자동 추정(점을 안 찍었을 때)이 원본 bag 에서 낸 값이고,
+테스트가 쓰는 `camsim/week3_lab.py` 의 `SAMPLE_*` 와 같음. 이 예제 bag 으로 점을 안 찍고 3장을 돌려도 pitch −4.25°, 높이 0.179 m 가 나옴.
+3-2 에서 점 4개를 찍으면 찍은 장면과 위치에 따라 조금 달라짐 (프레임 0 에서 약 −3.7°, 0.187 m).
 
 차에서 녹화하는 명령은 [rosbag/README.md](../../rosbag/README.md).

@@ -64,8 +64,9 @@ bag (약 1.3 GB) 은 첫 실행 때 구글 드라이브에서 받는다. 노트�
     out/real_dataset/       실차 BEV + labels.csv (DiskDataset 포맷 그대로). x, y, theta 는 nan (world pose 없음)
 
 bag 에는 extrinsic 이 없다 (`camera_info` 는 0 으로 비어 있고 `/tf` 도 녹화 안 됨). `ost.yaml` 은 intrinsic 뿐이다.
-그래서 pitch 는 정지 구간에서 위에서 본 두 차선이 평행해지는 값으로, 높이는 실측 차선 간격(테이프 중심 간) 하나로 정한다.
-roll, yaw 는 0 가정. 지금 bag 기준 pitch -4.25 도(살짝 위로 들림), 높이 0.178 m (차선 간격 0.80 m 실측).
+그래서 3장에서 곧은 두 테이프에 점 4개를 찍어(손으로 IPM, `week3_lab.LaneClicker`) 두 선이 만나는 소실점의 높이로 pitch 를,
+실측 차선 간격(테이프 중심 간) 하나로 높이를 정한다. 점을 안 찍으면 정지 구간에서 위에서 본 두 차선이 평행해지는 값으로 pitch 를 자동 추정한다.
+roll, yaw 는 0 가정. 지금 bag 기준 pitch -4.25 도(살짝 위로 들림), 높이 0.178 m (차선 간격 0.80 m 실측, 점을 안 찍었을 때 자동 추정값).
 
 라벨은 `gt.waypoint_ahead` 와 같은 정의다. HSV 로 노란 테이프를 골라 지면에 펴고, 두 차선의 중점으로 중심선을
 만들고, 후륜축에 가장 가까운 점에서 호길이 `ahead_m` 앞의 점을 잡는다. `test_real.py` 가 camsim 렌더러로 그린
